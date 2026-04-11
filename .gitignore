@@ -1,0 +1,16 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.local
+.deno/
+.next/
+dist/
+build/
+.DS_Store
+Thumbs.db
+postgres-data/
+elasticsearch-data/
+*.pkl
+*.joblib
