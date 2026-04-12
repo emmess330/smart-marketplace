@@ -2,8 +2,10 @@ import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query } from "../shared/db.ts";
 import { authMiddleware } from "../shared/middleware.ts";
+import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
+app.use("*", corsConfig);
 
 const addToCartSchema = z.object({
   product_id: z.string().uuid(),

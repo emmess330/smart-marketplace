@@ -2,8 +2,10 @@ import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query } from "../shared/db.ts";
 import { authMiddleware } from "../shared/middleware.ts";
+import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
+app.use("*", corsConfig);
 
 const productSchema = z.object({
   name: z.string().min(2),
@@ -67,13 +69,13 @@ app.get("/products/:id", async (c) => {
     const { id } = c.req.param();
 
     const result = await query(
-      `SELECT p.*, s.store_name, s.id as seller_id, c.name as category_name
-       FROM products p
-       LEFT JOIN sellers s ON p.seller_id = s.id
-       LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.id = $1 AND p.is_active = true`,
-      [id]
-    );
+  `SELECT p.*, s.store_name, c.name as category_name
+   FROM products p
+   LEFT JOIN sellers s ON p.seller_id = s.id
+   LEFT JOIN categories c ON p.category_id = c.id
+   WHERE p.id = $1 AND p.is_active = true`,
+  [id]
+);
 
     if (result.rows.length === 0) {
       return c.json({ error: "Product not found" }, 404);

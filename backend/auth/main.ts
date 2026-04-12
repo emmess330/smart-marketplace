@@ -3,8 +3,10 @@ import { hash, compare } from "bcrypt";
 import { z } from "zod";
 import { query } from "../shared/db.ts";
 import { generateTokens } from "../shared/jwt.ts";
+import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
+app.use("*", corsConfig);
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -18,13 +20,11 @@ const loginSchema = z.object({
   password: z.string(),
 });
 
-// POST /auth/register
 app.post("/auth/register", async (c) => {
   try {
     const body = await c.req.json();
     const data = registerSchema.parse(body);
 
-    // Check if email already exists
     const existing = await query(
       "SELECT id FROM users WHERE email = $1",
       [data.email]
@@ -48,7 +48,6 @@ app.post("/auth/register", async (c) => {
       user.role as string
     );
 
-    // Store refresh token
     await query(
       `INSERT INTO sessions (user_id, refresh_token, expires_at)
        VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
@@ -70,7 +69,6 @@ app.post("/auth/register", async (c) => {
   }
 });
 
-// POST /auth/login
 app.post("/auth/login", async (c) => {
   try {
     const body = await c.req.json();
@@ -118,42 +116,34 @@ app.post("/auth/login", async (c) => {
   }
 });
 
-// POST /auth/logout
 app.post("/auth/logout", async (c) => {
   try {
     const body = await c.req.json();
     const { refreshToken } = body;
-
     if (refreshToken) {
       await query("DELETE FROM sessions WHERE refresh_token = $1", [refreshToken]);
     }
-
     return c.json({ message: "Logged out successfully" });
   } catch {
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
-// GET /auth/me — protected route to verify token works
 app.get("/auth/me", async (c) => {
   const authHeader = c.req.header("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-
   try {
     const { verifyToken } = await import("../shared/jwt.ts");
     const payload = await verifyToken(authHeader.slice(7));
-
     const result = await query(
       "SELECT id, email, full_name, role FROM users WHERE id = $1",
       [payload.sub]
     );
-
     if (result.rows.length === 0) {
       return c.json({ error: "User not found" }, 404);
     }
-
     return c.json({ user: result.rows[0] });
   } catch {
     return c.json({ error: "Invalid token" }, 401);
