@@ -89,3 +89,24 @@ export const usersApi = {
   getSeller: (id: string) =>
     axios.get(`${USERS_URL}/users/sellers/${id}`),
 };
+
+
+
+const SEARCH_URL = "http://localhost:8005";
+
+export const searchApi = {
+  search: (params: {
+    q?: string;
+    category?: string;
+    min_price?: number;
+    max_price?: number;
+    page?: number;
+    limit?: number;
+  }) => axios.get(`${SEARCH_URL}/search`, { params }),
+
+  suggest: (q: string) =>
+    axios.get(`${SEARCH_URL}/search/suggest`, { params: { q } }),
+
+  index: () =>
+    axios.post(`${SEARCH_URL}/search/index`),
+};
