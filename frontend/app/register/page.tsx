@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
+import { usersApi } from "@/lib/api";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -18,21 +19,34 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      const res = await authApi.register(form);
-      setUser(res.data.user);
-      router.push("/products");
-    } catch (err: unknown) {
-      const error = err as { response?: { data?: { error?: string } } };
-      setError(error.response?.data?.error || "Registration failed");
-    } finally {
-      setLoading(false);
+  e.preventDefault();
+  setLoading(true);
+  setError("");
+  try {
+    const res = await authApi.register(form);
+    setUser(res.data.user);
+    
+    // If user registered as seller, create seller profile
+    if (form.role === "seller") {
+      try {
+        await usersApi.createSellerProfile({
+          store_name: `${form.full_name}'s Store`,
+          store_description: "Welcome to my store"
+        });
+      } catch (sellerErr) {
+        console.error("Failed to create seller profile", sellerErr);
+        // Optionally show a warning but still redirect
+      }
     }
-  };
-
+    
+    router.push("/products");
+  } catch (err: unknown) {
+    const error = err as { response?: { data?: { error?: string } } };
+    setError(error.response?.data?.error || "Registration failed");
+  } finally {
+    setLoading(false);
+  }
+};
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 w-full max-w-md">

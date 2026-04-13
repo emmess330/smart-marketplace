@@ -12,8 +12,12 @@ function authHeaders() {
 }
 
 export const authApi = {
-  register: (data: { email: string; password: string; full_name: string; role: string }) =>
-    axios.post(`${AUTH_URL}/auth/register`, data),
+  register: async (data: { email: string; password: string; full_name: string; role: string }) => {
+    const res = await axios.post(`${AUTH_URL}/auth/register`, data);
+    Cookies.set("access_token", res.data.accessToken, { expires: 1 });
+    Cookies.set("refresh_token", res.data.refreshToken, { expires: 7 });
+    return res;
+  },
 
   login: async (data: { email: string; password: string }) => {
     const res = await axios.post(`${AUTH_URL}/auth/login`, data);
