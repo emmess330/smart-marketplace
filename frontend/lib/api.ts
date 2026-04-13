@@ -124,3 +124,21 @@ export const recommendApi = {
   popular: () =>
     axios.get(`${RECOMMEND_URL}/recommend/popular`),
 };
+
+
+const FORECAST_URL = "http://localhost:8007";
+
+export const analyticsApi = {
+  getSellerAnalytics: () =>
+    axios.get(`${ORDERS_URL}/seller/analytics`, { headers: authHeaders() }),
+};
+
+export const forecastApi = {
+  getForecast: (userId: string) =>
+    axios.get(`${FORECAST_URL}/forecast/${userId}`),
+
+  train: (sellerId?: string) =>
+    axios.post(`${FORECAST_URL}/forecast/train`, null, {
+      params: sellerId ? { seller_id: sellerId } : {},
+    }),
+};

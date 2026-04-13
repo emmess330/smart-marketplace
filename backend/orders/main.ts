@@ -307,5 +307,112 @@ app.get("/orders/:id", authMiddleware, async (c) => {
   }
 });
 
+
+// GET /seller/analytics — seller sales overview
+app.get("/seller/analytics", authMiddleware, async (c) => {
+  try {
+    const userId = c.get("userId");
+    const role = c.get("role");
+
+    if (role !== "seller") {
+      return c.json({ error: "Sellers only" }, 403);
+    }
+
+    const sellerResult = await query(
+      "SELECT id FROM sellers WHERE user_id = $1",
+      [userId]
+    );
+
+    if (sellerResult.rows.length === 0) {
+      return c.json({ error: "Seller profile not found" }, 404);
+    }
+
+    const seller = sellerResult.rows[0] as Record<string, unknown>;
+    const sellerId = seller.id;
+
+    // Total revenue and orders
+    const overviewResult = await query(
+      `SELECT 
+        COUNT(DISTINCT o.id) as total_orders,
+        COALESCE(SUM(oi.quantity * oi.price_at_purchase), 0) as total_revenue,
+        COALESCE(SUM(oi.quantity), 0) as total_units_sold
+       FROM order_items oi
+       JOIN orders o ON oi.order_id = o.id
+       JOIN products p ON oi.product_id = p.id
+       WHERE p.seller_id = $1 AND o.status = 'confirmed'`,
+      [sellerId]
+    );
+
+    // Daily revenue for last 30 days
+    const dailyResult = await query(
+      `SELECT 
+        DATE(o.created_at) as date,
+        COALESCE(SUM(oi.quantity * oi.price_at_purchase), 0) as revenue,
+        COUNT(DISTINCT o.id) as orders
+       FROM order_items oi
+       JOIN orders o ON oi.order_id = o.id
+       JOIN products p ON oi.product_id = p.id
+       WHERE p.seller_id = $1 
+         AND o.status = 'confirmed'
+         AND o.created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY DATE(o.created_at)
+       ORDER BY date ASC`,
+      [sellerId]
+    );
+
+    // Top products by revenue
+    const topProductsResult = await query(
+      `SELECT 
+        p.id, p.name, p.price, p.stock_quantity,
+        COALESCE(SUM(oi.quantity), 0) as units_sold,
+        COALESCE(SUM(oi.quantity * oi.price_at_purchase), 0) as revenue
+       FROM products p
+       LEFT JOIN order_items oi ON p.id = oi.product_id
+       LEFT JOIN orders o ON oi.order_id = o.id AND o.status = 'confirmed'
+       WHERE p.seller_id = $1 AND p.is_active = true
+       GROUP BY p.id, p.name, p.price, p.stock_quantity
+       ORDER BY revenue DESC
+       LIMIT 5`,
+      [sellerId]
+    );
+
+    // Low stock alert
+    const lowStockResult = await query(
+      `SELECT id, name, stock_quantity
+       FROM products
+       WHERE seller_id = $1 AND is_active = true AND stock_quantity < 10
+       ORDER BY stock_quantity ASC`,
+      [sellerId]
+    );
+
+    const overview = overviewResult.rows[0] as Record<string, unknown>;
+
+return c.json({
+  overview: {
+    total_orders: Number(overview.total_orders),
+    total_revenue: Number(overview.total_revenue),
+    total_units_sold: Number(overview.total_units_sold),
+  },
+  daily_revenue: (dailyResult.rows as Record<string, unknown>[]).map(row => ({
+    date: row.date,
+    revenue: Number(row.revenue),
+    orders: Number(row.orders),
+  })),
+  top_products: (topProductsResult.rows as Record<string, unknown>[]).map(row => ({
+    id: row.id,
+    name: row.name,
+    price: Number(row.price),
+    stock_quantity: Number(row.stock_quantity),
+    units_sold: Number(row.units_sold),
+    revenue: Number(row.revenue),
+  })),
+  low_stock: lowStockResult.rows,
+});
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 console.log("Orders service running on http://localhost:8003");
 Deno.serve({ port: 8003 }, app.fetch);

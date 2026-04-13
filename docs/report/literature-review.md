@@ -81,3 +81,69 @@ Information Science and Technology*, 52(3), pp. 226–234.
 
 Tunkelang, D. (2009) *Faceted Search*. San Rafael: Morgan and Claypool 
 Publishers.
+
+
+
+
+## 2.2 Recommendation Systems in E-commerce
+
+Recommendation systems have become a cornerstone of modern e-commerce,
+with Amazon reporting that 35% of its revenue is generated through product
+recommendations (McKinsey, 2013). The academic literature identifies three
+main approaches: collaborative filtering, content-based filtering, and hybrid
+methods that combine both.
+
+Collaborative filtering exploits the collective behaviour of users, operating
+on the principle that users who agreed in the past will agree in the future
+(Goldberg et al., 1992). Matrix factorisation techniques, particularly 
+Singular Value Decomposition (SVD), decompose the user-item interaction matrix
+into latent factor representations that capture underlying preferences. Koren
+et al. (2009) demonstrated the effectiveness of matrix factorisation in the
+Netflix Prize competition, showing that latent factor models outperform
+neighbourhood-based methods for sparse interaction data. This project implements
+TruncatedSVD from scikit-learn, which is computationally efficient for sparse
+matrices and scales well as the user base grows.
+
+Content-based filtering recommends items similar to those a user has previously
+engaged with, based on item features rather than user behaviour (Lops et al.,
+2011). This approach addresses the cold-start problem inherent in collaborative
+filtering — new items with no interaction history can still be recommended based
+on their attributes. In this project, content-based similarity is computed using
+category membership, tag overlap, and price proximity, producing a composite
+relevance score for each candidate product.
+
+A key challenge in recommendation system evaluation is measuring quality without
+live A/B testing infrastructure. This project uses offline evaluation metrics
+standard in the literature: Precision@k measures the proportion of recommended
+items that are relevant within the top k results, while Recall@k measures the
+proportion of relevant items that appear in the top k recommendations (Herlocker
+et al., 2004). These metrics provide a quantitative basis for comparing model
+variants and justifying design decisions in the report.
+
+The hybrid approach adopted in this project — falling back from collaborative
+to content-based filtering when interaction data is sparse — follows the
+recommendation of Burke (2002), who argues that hybrid systems consistently
+outperform single-method approaches across different data density conditions.
+
+## References (additions)
+
+Burke, R. (2002) 'Hybrid recommender systems: survey and experiments', 
+*User Modeling and User-Adapted Interaction*, 12(4), pp. 331–370.
+
+Goldberg, D., Nichols, D., Oki, B.M. and Terry, D. (1992) 'Using collaborative
+filtering to weave an information tapestry', *Communications of the ACM*, 
+35(12), pp. 61–70.
+
+Herlocker, J.L., Konstan, J.A., Terveen, L.G. and Riedl, J.T. (2004) 
+'Evaluating collaborative filtering recommender systems', *ACM Transactions 
+on Information Systems*, 22(1), pp. 5–53.
+
+Koren, Y., Bell, R. and Volinsky, C. (2009) 'Matrix factorization techniques
+for recommender systems', *Computer*, 42(8), pp. 30–37.
+
+Lops, P., de Gemmis, M. and Semeraro, G. (2011) 'Content-based recommender
+systems: state of the art and trends', in Ricci, F. et al. (eds) 
+*Recommender Systems Handbook*. Boston: Springer, pp. 73–105.
+
+McKinsey Global Institute (2013) *The Social Economy: Unlocking Value and 
+Productivity Through Social Technologies*. New York: McKinsey and Company.

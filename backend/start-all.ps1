@@ -8,3 +8,6 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PWD'; deno r
 Start-Sleep -Seconds 2
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PWD'; deno run --allow-net --allow-env --allow-read search/main.ts"
 Write-Host "All services starting..."
+
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd 'C:\Users\user\Desktop\emm ess final project contract\smart-marketplace\ml'; .venv\Scripts\activate; cd forecasting; python api.py"
+Write-Host "Forecasting service starting..."
