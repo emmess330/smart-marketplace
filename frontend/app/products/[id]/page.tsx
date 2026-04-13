@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { productsApi, ordersApi } from "@/lib/api";
+import Link from "next/link";
+import { productsApi, ordersApi, recommendApi } from "@/lib/api";
 import { useAuthStore, useCartStore } from "@/lib/store";
 import Cookies from "js-cookie";
 
@@ -16,6 +17,15 @@ interface Product {
   tags: string[];
 }
 
+interface SimilarProduct {
+  id: string;
+  name: string;
+  price: number;
+  store_name: string;
+  category_name: string;
+  stock_quantity: number;
+}
+
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -26,11 +36,16 @@ export default function ProductDetailPage() {
   const [quantity, setQuantity] = useState(1);
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState("");
+  const [similar, setSimilar] = useState<SimilarProduct[]>([]);
 
   useEffect(() => {
     productsApi.get(id)
       .then(res => setProduct(res.data.product))
       .finally(() => setLoading(false));
+
+    recommendApi.similar(id)
+      .then(res => setSimilar(res.data.similar))
+      .catch(() => setSimilar([]));
   }, [id]);
 
   const handleAddToCart = async () => {
@@ -154,6 +169,28 @@ export default function ProductDetailPage() {
           )}
         </div>
       </div>
+
+      {similar.length > 0 && (
+        <div className="mt-16">
+          <h2 className="text-xl font-bold text-gray-900 mb-6">Similar products</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {similar.map(p => (
+              <Link key={p.id} href={`/products/${p.id}`}>
+                <div className="bg-white rounded-xl p-4 border border-gray-100 hover:shadow-md transition-shadow cursor-pointer">
+                  <div className="bg-gray-100 h-36 rounded-lg mb-3 flex items-center justify-center text-gray-400 text-sm">
+                    No image
+                  </div>
+                  <h3 className="font-medium text-gray-900 truncate text-sm">{p.name}</h3>
+                  <p className="text-sm text-gray-500 mt-1">{p.store_name}</p>
+                  <p className="text-blue-600 font-semibold mt-2">
+                    ${Number(p.price).toFixed(2)}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

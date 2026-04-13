@@ -110,3 +110,17 @@ export const searchApi = {
   index: () =>
     axios.post(`${SEARCH_URL}/search/index`),
 };
+
+
+const RECOMMEND_URL = "http://localhost:8006";
+
+export const recommendApi = {
+  forUser: (userId: string) =>
+    axios.get(`${RECOMMEND_URL}/recommend/user/${userId}`),
+
+  similar: (productId: string) =>
+    axios.get(`${RECOMMEND_URL}/recommend/similar/${productId}`),
+
+  popular: () =>
+    axios.get(`${RECOMMEND_URL}/recommend/popular`),
+};
