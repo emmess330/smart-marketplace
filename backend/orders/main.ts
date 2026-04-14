@@ -3,6 +3,7 @@ import { z } from "zod";
 import { query } from "../shared/db.ts";
 import { authMiddleware } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
+import Stripe from "https://esm.sh/stripe@14.21.0";
 
 const app = new Hono();
 app.use("*", corsConfig);
@@ -414,5 +415,44 @@ return c.json({
   }
 });
 
+
+app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
+  try {
+    const userId = c.get("userId");
+    const body = await c.req.json();
+    const { amount } = body; // amount in cents
+
+    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+    if (!stripeSecretKey) {
+      console.error("STRIPE_SECRET_KEY not set");
+      return c.json({ error: "Payment not configured" }, 500);
+    }
+
+    const params = new URLSearchParams();
+    params.append("amount", String(amount));
+    params.append("currency", "gbp");
+    params.append("metadata[user_id]", userId);
+
+    const response = await fetch("https://api.stripe.com/v1/payment_intents", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${stripeSecretKey}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params,
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Stripe error:", data);
+      return c.json({ error: data.error?.message || "Payment failed" }, 400);
+    }
+
+    return c.json({ clientSecret: data.client_secret });
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
 console.log("Orders service running on http://localhost:8003");
 Deno.serve({ port: 8003 }, app.fetch);

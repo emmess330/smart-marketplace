@@ -22,7 +22,6 @@ export default function CartPage() {
   const [items, setItems] = useState<CartItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [checkingOut, setCheckingOut] = useState(false);
 
   useEffect(() => {
     if (!Cookies.get("access_token")) {
@@ -54,27 +53,8 @@ export default function CartPage() {
     fetchCart();
   };
 
-  const handleCheckout = async () => {
-    setCheckingOut(true);
-    try {
-      await ordersApi.checkout({
-        shipping_address: {
-          full_name: "Test User",
-          line1: "123 Main St",
-          city: "London",
-          country: "GB",
-          postal_code: "EC1A 1BB",
-        },
-      });
-      setItems([]);
-      setTotal(0);
-      setItemCount(0);
-      router.push("/orders");
-    } catch {
-      alert("Checkout failed. Please try again.");
-    } finally {
-      setCheckingOut(false);
-    }
+  const handleCheckout = () => {
+    router.push("/checkout");
   };
 
   if (loading) return (
@@ -146,14 +126,10 @@ export default function CartPage() {
         </div>
         <button
           onClick={handleCheckout}
-          disabled={checkingOut}
-          className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
+          className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-medium"
         >
-          {checkingOut ? "Processing..." : "Checkout"}
+          Proceed to Checkout
         </button>
-        <p className="text-xs text-gray-400 text-center mt-2">
-          Using test shipping address for now — full checkout form coming in Phase 3
-        </p>
       </div>
     </div>
   );
