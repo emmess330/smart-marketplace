@@ -95,8 +95,12 @@ export default function ProductDetailPage() {
       </button>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="bg-gray-100 rounded-xl h-96 flex items-center justify-center text-gray-400">
-          No image
+        <div className="bg-gray-100 rounded-xl overflow-hidden">
+          <img
+            src={`https://picsum.photos/seed/${product.id}/600/400`}
+            alt={product.name}
+            className="w-full h-full object-cover"
+          />
         </div>
 
         <div>
@@ -176,15 +180,21 @@ export default function ProductDetailPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {similar.map(p => (
               <Link key={p.id} href={`/products/${p.id}`}>
-                <div className="bg-white rounded-xl p-4 border border-gray-100 hover:shadow-md transition-shadow cursor-pointer">
-                  <div className="bg-gray-100 h-36 rounded-lg mb-3 flex items-center justify-center text-gray-400 text-sm">
-                    No image
+                <div className="bg-white rounded-xl overflow-hidden border border-gray-100 hover:shadow-md transition-shadow cursor-pointer group">
+                  <div className="bg-gray-100 h-36 overflow-hidden">
+                    <img
+                      src={`https://picsum.photos/seed/${p.id}/300/200`}
+                      alt={p.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
                   </div>
-                  <h3 className="font-medium text-gray-900 truncate text-sm">{p.name}</h3>
-                  <p className="text-sm text-gray-500 mt-1">{p.store_name}</p>
-                  <p className="text-blue-600 font-semibold mt-2">
-                    ${Number(p.price).toFixed(2)}
-                  </p>
+                  <div className="p-3">
+                    <h3 className="font-medium text-gray-900 truncate text-sm">{p.name}</h3>
+                    <p className="text-sm text-gray-500 mt-1">{p.store_name}</p>
+                    <p className="text-blue-600 font-semibold mt-2">
+                      ${Number(p.price).toFixed(2)}
+                    </p>
+                  </div>
                 </div>
               </Link>
             ))}
