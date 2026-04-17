@@ -70,9 +70,14 @@ export default function Navbar() {
             {user ? (
               <div className="flex items-center gap-4">
                 {user.role === "seller" && (
-                  <Link href="/seller/dashboard" className="text-sm text-gray-600 hover:text-gray-900">
-                    Dashboard
-                  </Link>
+                  <>
+                    <Link href="/seller/dashboard" className="text-sm text-gray-600 hover:text-gray-900">
+                      Dashboard
+                    </Link>
+                    <Link href="/seller/products" className="text-sm text-gray-600 hover:text-gray-900">
+                      My Products
+                    </Link>
+                  </>
                 )}
                 <Link href="/orders" className="text-sm text-gray-600 hover:text-gray-900">
                   Orders
@@ -146,9 +151,14 @@ export default function Navbar() {
             {user ? (
               <>
                 {user.role === "seller" && (
-                  <Link href="/seller/dashboard" className="block text-gray-600 hover:text-gray-900 text-sm py-1" onClick={() => setMobileMenuOpen(false)}>
-                    Dashboard
-                  </Link>
+                  <>
+                    <Link href="/seller/dashboard" className="block text-gray-600 hover:text-gray-900 text-sm py-1" onClick={() => setMobileMenuOpen(false)}>
+                      Dashboard
+                    </Link>
+                    <Link href="/seller/products" className="block text-gray-600 hover:text-gray-900 text-sm py-1" onClick={() => setMobileMenuOpen(false)}>
+                      My Products
+                    </Link>
+                  </>
                 )}
                 <Link href="/orders" className="block text-gray-600 hover:text-gray-900 text-sm py-1" onClick={() => setMobileMenuOpen(false)}>
                   Orders

@@ -1,10 +1,22 @@
 import axios from "axios";
 import Cookies from "js-cookie";
 
-const AUTH_URL = "http://localhost:8001";
-const PRODUCTS_URL = "http://localhost:8002";
-const ORDERS_URL = "http://localhost:8003";
-const USERS_URL = "http://localhost:8004";
+// Dynamically determine API base URL
+let baseURL = "http://localhost";
+if (typeof window !== "undefined") {
+  const hostname = window.location.hostname;
+  if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+    baseURL = `http://${hostname}`;
+  }
+}
+
+const AUTH_URL = `${baseURL}:8001`;
+const PRODUCTS_URL = `${baseURL}:8002`;
+const ORDERS_URL = `${baseURL}:8003`;
+const USERS_URL = `${baseURL}:8004`;
+const SEARCH_URL = `${baseURL}:8005`;
+const RECOMMEND_URL = `${baseURL}:8006`;
+const FORECAST_URL = `${baseURL}:8007`;
 
 function authHeaders() {
   const token = Cookies.get("access_token");
@@ -38,7 +50,7 @@ export const authApi = {
 };
 
 export const productsApi = {
-  list: (params?: { page?: number; limit?: number; category?: string }) =>
+  list: (params?: { page?: number; limit?: number; category?: string; seller_id?: string }) =>
     axios.get(`${PRODUCTS_URL}/products`, { params }),
 
   get: (id: string) =>
@@ -55,6 +67,10 @@ export const productsApi = {
 
   categories: () =>
     axios.get(`${PRODUCTS_URL}/categories`),
+
+  // Get products for the authenticated seller (requires backend endpoint)
+  getSellerProducts: () =>
+    axios.get(`${PRODUCTS_URL}/seller/products`, { headers: authHeaders() }),
 };
 
 export const ordersApi = {
@@ -94,10 +110,6 @@ export const usersApi = {
     axios.get(`${USERS_URL}/users/sellers/${id}`),
 };
 
-
-
-const SEARCH_URL = "http://localhost:8005";
-
 export const searchApi = {
   search: (params: {
     q?: string;
@@ -115,9 +127,6 @@ export const searchApi = {
     axios.post(`${SEARCH_URL}/search/index`),
 };
 
-
-const RECOMMEND_URL = "http://localhost:8006";
-
 export const recommendApi = {
   forUser: (userId: string) =>
     axios.get(`${RECOMMEND_URL}/recommend/user/${userId}`),
@@ -128,9 +137,6 @@ export const recommendApi = {
   popular: () =>
     axios.get(`${RECOMMEND_URL}/recommend/popular`),
 };
-
-
-const FORECAST_URL = "http://localhost:8007";
 
 export const analyticsApi = {
   getSellerAnalytics: () =>

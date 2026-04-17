@@ -15,6 +15,7 @@ interface Product {
   category_name: string;
   stock_quantity: number;
   tags: string[];
+  images?: (string | { url: string })[];
 }
 
 interface SimilarProduct {
@@ -24,6 +25,16 @@ interface SimilarProduct {
   store_name: string;
   category_name: string;
   stock_quantity: number;
+  images?: (string | { url: string })[];
+}
+
+function getImageUrl(images: any[] | undefined, productId: string, size: string = "400/300"): string {
+  if (images && images.length > 0) {
+    const first = images[0];
+    if (typeof first === "string") return first;
+    if (first && typeof first === "object" && "url" in first) return first.url;
+  }
+  return `https://picsum.photos/seed/${productId}/${size}`;
 }
 
 export default function ProductDetailPage() {
@@ -97,7 +108,7 @@ export default function ProductDetailPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <div className="bg-gray-100 rounded-xl overflow-hidden">
           <img
-            src={`https://picsum.photos/seed/${product.id}/600/400`}
+            src={getImageUrl(product.images, product.id, "600/400")}
             alt={product.name}
             className="w-full h-full object-cover"
           />
@@ -183,7 +194,7 @@ export default function ProductDetailPage() {
                 <div className="bg-white rounded-xl overflow-hidden border border-gray-100 hover:shadow-md transition-shadow cursor-pointer group">
                   <div className="bg-gray-100 h-36 overflow-hidden">
                     <img
-                      src={`https://picsum.photos/seed/${p.id}/300/200`}
+                      src={getImageUrl(p.images, p.id, "300/200")}
                       alt={p.name}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     />

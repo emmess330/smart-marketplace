@@ -13,6 +13,7 @@ interface Product {
   category_name: string;
   stock_quantity: number;
   score: number;
+  images?: string[]
 }
 
 interface Category {
@@ -229,13 +230,18 @@ export default function SearchContent() {
               {products.map(product => (
                 <Link key={product.id} href={`/products/${product.id}`}>
                   <div className="bg-white rounded-xl overflow-hidden border border-gray-100 hover:shadow-lg transition-shadow cursor-pointer group">
-                    <div className="bg-gray-100 h-40 overflow-hidden">
-                      <img
-                        src={`https://picsum.photos/seed/${product.id}/400/300`}
-                        alt={product.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                    </div>
+                   <div className="bg-gray-100 h-40 overflow-hidden">
+  {(() => {
+    let imgUrl = null;
+    if (product.images && product.images.length > 0) {
+      const first = product.images[0];
+      if (typeof first === "string") imgUrl = first;
+      else if (first && typeof first === "object" && "url" in first) imgUrl = first.url;
+    }
+    if (!imgUrl) imgUrl = `https://picsum.photos/seed/${product.id}/400/300`;
+    return <img src={imgUrl} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />;
+  })()}
+</div>
                     <div className="p-4">
                       <h3 className="font-medium text-gray-900 truncate">{product.name}</h3>
                       <p className="text-sm text-gray-500 mt-1">{product.store_name}</p>

@@ -8,7 +8,8 @@ const withPWA = require("next-pwa")({
 });
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Add your phone's IP address here, as a string, inside the array.
+  allowedDevOrigins: ['10.143.191.37'],
 };
 
 module.exports = withPWA(nextConfig);

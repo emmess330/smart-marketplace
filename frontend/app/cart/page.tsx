@@ -14,6 +14,16 @@ interface CartItem {
   quantity: number;
   store_name: string;
   stock_quantity: number;
+  images?: (string | { url: string })[];
+}
+
+function getImageUrl(item: CartItem): string | null {
+  if (item.images && item.images.length > 0) {
+    const first = item.images[0];
+    if (typeof first === "string") return first;
+    if (first && typeof first === "object" && "url" in first) return first.url;
+  }
+  return null;
 }
 
 export default function CartPage() {
@@ -75,48 +85,57 @@ export default function CartPage() {
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Your cart</h1>
 
       <div className="space-y-4 mb-8">
-        {items.map(item => (
-          <div key={item.id} className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-4">
-            <div className="bg-gray-100 rounded-lg w-16 h-16 flex items-center justify-center text-gray-400 text-xs flex-shrink-0">
-              Img
+        {items.map(item => {
+          const imageUrl = getImageUrl(item);
+          return (
+            <div key={item.id} className="bg-white rounded-xl border border-gray-100 p-4 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+              <div className="bg-gray-100 rounded-lg w-16 h-16 flex items-center justify-center text-gray-400 text-xs flex-shrink-0">
+                {imageUrl ? (
+                  <img src={imageUrl} alt={item.name} className="w-full h-full object-cover rounded-lg" />
+                ) : (
+                  'Img'
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-gray-900 truncate">{item.name}</p>
+                <p className="text-sm text-gray-500">{item.store_name}</p>
+                <p className="text-blue-600 font-semibold text-sm mt-1">
+                  ${Number(item.price).toFixed(2)}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center border border-gray-200 rounded-lg">
+                  <button
+                    onClick={() => handleQuantityChange(item.id, item.quantity - 1)}
+                    className="px-2 py-1 text-gray-600 hover:bg-gray-50 rounded-l-lg text-sm"
+                  >
+                    -
+                  </button>
+                  <span className="px-3 py-1 text-sm">{item.quantity}</span>
+                  <button
+                    onClick={() => handleQuantityChange(item.id, item.quantity + 1)}
+                    className="px-2 py-1 text-gray-600 hover:bg-gray-50 rounded-r-lg text-sm"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <p className="font-semibold text-gray-900 w-20 text-right">
+                  ${(Number(item.price) * item.quantity).toFixed(2)}
+                </p>
+
+                <button
+                  onClick={() => handleRemove(item.id)}
+                  className="text-red-400 hover:text-red-600 text-sm"
+                >
+                  Remove
+                </button>
+              </div>
             </div>
-
-            <div className="flex-1 min-w-0">
-              <p className="font-medium text-gray-900 truncate">{item.name}</p>
-              <p className="text-sm text-gray-500">{item.store_name}</p>
-              <p className="text-blue-600 font-semibold text-sm mt-1">
-                ${Number(item.price).toFixed(2)}
-              </p>
-            </div>
-
-            <div className="flex items-center border border-gray-200 rounded-lg">
-              <button
-                onClick={() => handleQuantityChange(item.id, item.quantity - 1)}
-                className="px-2 py-1 text-gray-600 hover:bg-gray-50 rounded-l-lg text-sm"
-              >
-                -
-              </button>
-              <span className="px-3 py-1 text-sm">{item.quantity}</span>
-              <button
-                onClick={() => handleQuantityChange(item.id, item.quantity + 1)}
-                className="px-2 py-1 text-gray-600 hover:bg-gray-50 rounded-r-lg text-sm"
-              >
-                +
-              </button>
-            </div>
-
-            <p className="font-semibold text-gray-900 w-20 text-right">
-              ${(Number(item.price) * item.quantity).toFixed(2)}
-            </p>
-
-            <button
-              onClick={() => handleRemove(item.id)}
-              className="text-red-400 hover:text-red-600 text-sm ml-2"
-            >
-              Remove
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 p-6">

@@ -11,6 +11,16 @@ interface Product {
   store_name: string;
   category_name: string;
   stock_quantity: number;
+  images?: (string | { url: string })[];
+}
+
+function getImageUrl(product: Product): string {
+  if (product.images && product.images.length > 0) {
+    const first = product.images[0];
+    if (typeof first === "string") return first;
+    if (first && typeof first === "object" && "url" in first) return first.url;
+  }
+  return `https://picsum.photos/seed/${product.id}/400/300`;
 }
 
 export default function ProductsPage() {
@@ -60,7 +70,7 @@ export default function ProductsPage() {
               <div className="bg-white rounded-xl overflow-hidden border border-gray-100 hover:shadow-lg transition-shadow cursor-pointer group">
                 <div className="bg-gray-100 h-48 overflow-hidden">
                   <img
-                    src={`https://picsum.photos/seed/${product.id}/400/300`}
+                    src={getImageUrl(product)}
                     alt={product.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />

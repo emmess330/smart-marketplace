@@ -17,12 +17,13 @@ const productSchema = z.object({
   tags: z.array(z.string()).default([]),
 });
 
-// GET /products — public, paginated list
+// GET /products — public, paginated list (with optional seller filter)
 app.get("/products", async (c) => {
   try {
     const page = Number(c.req.query("page") || 1);
     const limit = Number(c.req.query("limit") || 20);
     const category = c.req.query("category");
+    const sellerId = c.req.query("seller_id"); // new parameter
     const offset = (page - 1) * limit;
 
     let sql = `
@@ -39,18 +40,31 @@ app.get("/products", async (c) => {
       sql += ` AND c.slug = $${params.length}`;
     }
 
+    if (sellerId) {
+      params.push(sellerId);
+      sql += ` AND p.seller_id = $${params.length}`;
+    }
+
     sql += ` ORDER BY p.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
 
     const result = await query(sql, params);
 
-    const countResult = await query(
-      `SELECT COUNT(*) FROM products p
-       LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.is_active = true ${category ? "AND c.slug = $1" : ""}`,
-      category ? [category] : []
-    );
-
+    let countSql = `
+      SELECT COUNT(*) FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.is_active = true
+    `;
+    const countParams: unknown[] = [];
+    if (category) {
+      countParams.push(category);
+      countSql += ` AND c.slug = $${countParams.length}`;
+    }
+    if (sellerId) {
+      countParams.push(sellerId);
+      countSql += ` AND p.seller_id = $${countParams.length}`;
+    }
+    const countResult = await query(countSql, countParams);
     const total = Number((countResult.rows[0] as Record<string, unknown>).count);
 
     return c.json({
@@ -238,6 +252,38 @@ app.get("/categories", async (c) => {
   try {
     const result = await query("SELECT * FROM categories ORDER BY name");
     return c.json({ categories: result.rows });
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+
+// GET /seller/products – get products for authenticated seller
+app.get("/seller/products", authMiddleware, async (c) => {
+  try {
+    const userId = c.get("userId");
+    const role = c.get("role");
+    if (role !== "seller") {
+      return c.json({ error: "Sellers only" }, 403);
+    }
+    const sellerResult = await query(
+      "SELECT id FROM sellers WHERE user_id = $1",
+      [userId]
+    );
+    if (sellerResult.rows.length === 0) {
+      return c.json({ error: "Seller profile not found" }, 404);
+    }
+    const sellerId = (sellerResult.rows[0] as Record<string, unknown>).id;
+    const result = await query(
+      `SELECT p.*, c.name as category_name
+       FROM products p
+       LEFT JOIN categories c ON p.category_id = c.id
+       WHERE p.seller_id = $1 AND p.is_active = true
+       ORDER BY p.created_at DESC`,
+      [sellerId]
+    );
+    return c.json({ products: result.rows });
   } catch (err) {
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
