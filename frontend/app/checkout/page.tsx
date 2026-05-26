@@ -1,12 +1,14 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
 import { ordersApi } from "@/lib/api";
 import Cookies from "js-cookie";
+import axios from "axios";
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
+const pk = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+const stripePromise = pk ? loadStripe(pk) : null;
 
 function CheckoutForm({ clientSecret, amount }: { clientSecret: string; amount: number }) {
   const stripe = useStripe();
@@ -50,7 +52,14 @@ function CheckoutForm({ clientSecret, amount }: { clientSecret: string; amount: 
         });
         router.push("/orders");
       } catch (err) {
-        setError("Order placement failed, but payment succeeded. Please contact support.");
+        let message = "Order placement failed, but payment succeeded. Please contact support.";
+        if (axios.isAxiosError(err)) {
+          const data = err.response?.data as { error?: string } | undefined;
+          if (data?.error) {
+            message = `${message} Reason: ${data.error}`;
+          }
+        }
+        setError(message);
         setLoading(false);
       }
     }
@@ -59,7 +68,7 @@ function CheckoutForm({ clientSecret, amount }: { clientSecret: string; amount: 
   return (
     <form onSubmit={handleSubmit} className="max-w-md mx-auto bg-white p-6 rounded-xl shadow">
       <div className="mb-4">
-        <p className="text-gray-600">Total: <strong>${amount.toFixed(2)}</strong></p>
+        <p className="text-gray-600">Total: <strong>£{amount.toFixed(2)}</strong></p>
       </div>
       <PaymentElement />
       {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
@@ -81,45 +90,73 @@ export default function CheckoutPage() {
   const [clientSecret, setClientSecret] = useState("");
   const [amount, setAmount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [initError, setInitError] = useState("");
+  const stripeOptions = useMemo(
+    () => ({
+      clientSecret,
+      appearance: { theme: "stripe" as const },
+    }),
+    [clientSecret],
+  );
 
   useEffect(() => {
     if (!Cookies.get("access_token")) {
       window.location.href = "/login";
       return;
     }
-    ordersApi.getCart()
-      .then(cart => {
-        const total = cart.data.total;
-        setAmount(total);
-        return fetch("http://localhost:8003/orders/create-payment-intent", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${Cookies.get("access_token")}`,
-          },
-          body: JSON.stringify({ amount: Math.round(total * 100) }),
-        });
-      })
-      .then(res => {
-        if (!res.ok) throw new Error("Failed to create payment intent");
-        return res.json();
-      })
-      .then(data => {
-        setClientSecret(data.clientSecret);
+    if (!pk) {
+      setInitError("Stripe is not configured: set NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY in frontend/.env.local");
+      setLoading(false);
+      return;
+    }
+    if (!stripePromise) {
+      setLoading(false);
+      return;
+    }
+
+    ordersApi
+      .createPaymentIntent()
+      .then((res) => {
+        const secret = res.data.clientSecret;
+        if (!secret) {
+          throw new Error(res.data.error || "No client secret returned");
+        }
+        setAmount(Number(res.data.total_amount) || 0);
+        setClientSecret(secret);
         setLoading(false);
       })
-      .catch(err => {
+      .catch((err: unknown) => {
         console.error(err);
+        let msg = "Failed to create payment intent";
+        if (axios.isAxiosError(err)) {
+          const data = err.response?.data as { error?: string } | undefined;
+          msg = data?.error || err.response?.statusText || err.message;
+        } else if (err instanceof Error) {
+          msg = err.message;
+        }
+        setInitError(msg);
         setLoading(false);
-        alert("Could not initialize payment: " + err.message);
       });
   }, []);
 
   if (loading) return <div className="text-center py-8">Loading checkout...</div>;
-  if (!clientSecret) return <div className="text-center py-8 text-red-500">Failed to load payment</div>;
+  if (initError) {
+    return (
+      <div className="max-w-lg mx-auto py-12 px-4 text-center text-red-600">
+        <p className="font-medium">Could not initialize payment</p>
+        <p className="text-sm mt-2 text-gray-700">{initError}</p>
+        <p className="text-xs mt-4 text-gray-500">
+          Check orders service (port 8003), STRIPE_SECRET_KEY in backend/.env, and that publishable/secret keys are from the same Stripe account (test mode).
+        </p>
+      </div>
+    );
+  }
+  if (!clientSecret || !stripePromise) {
+    return <div className="text-center py-8 text-red-500">Failed to load payment</div>;
+  }
 
   return (
-    <Elements stripe={stripePromise} options={{ clientSecret }}>
+    <Elements key={clientSecret} stripe={stripePromise} options={stripeOptions}>
       <div className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-lg mx-auto">
           <h1 className="text-2xl font-bold mb-6 text-center">Checkout</h1>

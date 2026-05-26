@@ -141,7 +141,7 @@ export default function SellerProductsPage() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Manage Products</h1>
+        <h1 className="text-2xl font-bold text-black">Manage Products</h1>
         <button
           onClick={handleCreate}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
@@ -154,12 +154,12 @@ export default function SellerProductsPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b">
             <tr>
-              <th className="text-left p-3">Image</th>
-              <th className="text-left p-3">Name</th>
-              <th className="text-left p-3">Price</th>
-              <th className="text-left p-3">Stock</th>
-              <th className="text-left p-3">Status</th>
-              <th className="text-left p-3">Actions</th>
+              <th className="text-left p-3 text-black">Image</th>
+              <th className="text-left p-3 text-black">Name</th>
+              <th className="text-left p-3 text-black">Price</th>
+              <th className="text-left p-3 text-black">Stock</th>
+              <th className="text-left p-3 text-black">Status</th>
+              <th className="text-left p-3 text-black">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -183,9 +183,9 @@ export default function SellerProductsPage() {
     );
   })()}
 </td>
-                <td className="p-3">{product.name}</td>
-                <td className="p-3">${product.price}</td>
-                <td className="p-3">{product.stock_quantity}</td>
+                <td className="p-3 text-black">{product.name}</td>
+                <td className="p-3 text-black">${product.price}</td>
+                <td className="p-3 text-black">{product.stock_quantity}</td>
                 <td className="p-3">
                   <span
                     className={`px-2 py-1 rounded-full text-xs ${
@@ -232,7 +232,7 @@ export default function SellerProductsPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })
                 }
-                className="w-full border rounded-lg p-2"
+                className="w-full border rounded-lg p-2 text-black"
                 required
               />
               <textarea
@@ -241,7 +241,7 @@ export default function SellerProductsPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, description: e.target.value })
                 }
-                className="w-full border rounded-lg p-2"
+                className="w-full border rounded-lg p-2 text-black"
                 rows={3}
               />
               <input
@@ -252,7 +252,7 @@ export default function SellerProductsPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, price: e.target.value })
                 }
-                className="w-full border rounded-lg p-2"
+                className="w-full border rounded-lg p-2 text-black"
                 required
               />
               <input
@@ -262,7 +262,7 @@ export default function SellerProductsPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, stock_quantity: e.target.value })
                 }
-                className="w-full border rounded-lg p-2"
+                className="w-full border rounded-lg p-2 text-black"
                 required
               />
               <select
@@ -290,7 +290,7 @@ export default function SellerProductsPage() {
                   placeholder="https://example.com/image.jpg"
                   value={formData.image_url}
                   onChange={(e) => handleImageUrlChange(e.target.value)}
-                  className="w-full border rounded-lg p-2"
+                  className="w-full border rounded-lg p-2 text-black"
                 />
                 {imagePreview && (
                   <div className="mt-2">
