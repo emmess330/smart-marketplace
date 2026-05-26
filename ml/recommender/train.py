@@ -1,83 +1,66 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 import pickle
-import psycopg2
 import json
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from db_config import get_db_url, print_db_hints
 
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "database": "marketplace",
-    "user": "marketplace_user",
-    "password": "marketplace_pass"
-}
-
-
-
-DB_URL = "postgresql://marketplace_user:marketplace_pass@localhost:5432/marketplace"
+MODEL_PATH = Path(__file__).with_name("model.pkl")
 
 def get_engine():
-    return create_engine(DB_URL)
+    return create_engine(get_db_url())
 
 def fetch_interaction_data():
     engine = get_engine()
     
     orders_query = """
-        SELECT oi.order_id, o.user_id, oi.product_id, 
-               oi.quantity::float as interaction_strength
+        SELECT o.user_id::text,
+               oi.product_id::text,
+               SUM(oi.quantity)::float as interaction_strength,
+               MAX(o.created_at) as last_ordered_at
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.id
         WHERE o.status = 'confirmed'
+        GROUP BY o.user_id, oi.product_id
     """
     
     products_query = """
-        SELECT p.id, p.name, p.price, p.tags,
+        SELECT p.id::text,
+               p.name,
+               COALESCE(p.description, '') as description,
+               p.price,
+               p.stock_quantity,
+               p.images,
+               p.tags,
                c.name as category_name,
-               s.store_name
+               s.store_name,
+               p.created_at
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
         LEFT JOIN sellers s ON p.seller_id = s.id
         WHERE p.is_active = true
     """
     
-    with engine.connect() as conn:
-        orders_df = pd.read_sql(orders_query, conn)
-        products_df = pd.read_sql(products_query, conn)
-    
-    return orders_df, products_df
+    try:
+        with engine.connect() as conn:
+            orders_df = pd.read_sql(text(orders_query), conn)
+            products_df = pd.read_sql(text(products_query), conn)
+    except Exception as e:
+        print_db_hints(e)
+        raise
 
-    return psycopg2.connect(**DB_CONFIG)
+    orders_df["user_id"] = orders_df.get("user_id", pd.Series(dtype=str)).astype(str)
+    orders_df["product_id"] = orders_df.get("product_id", pd.Series(dtype=str)).astype(str)
+    products_df["id"] = products_df.get("id", pd.Series(dtype=str)).astype(str)
 
-    conn = get_connection()
-    
-    # Get order-based interactions (strongest signal)
-    orders_query = """
-        SELECT oi.order_id, o.user_id, oi.product_id, 
-               oi.quantity::float as interaction_strength
-        FROM order_items oi
-        JOIN orders o ON oi.order_id = o.id
-        WHERE o.status = 'confirmed'
-    """
-    
-    # Get all products for content features
-    products_query = """
-        SELECT p.id, p.name, p.price, p.tags,
-               c.name as category_name,
-               s.store_name
-        FROM products p
-        LEFT JOIN categories c ON p.category_id = c.id
-        LEFT JOIN sellers s ON p.seller_id = s.id
-        WHERE p.is_active = true
-    """
-    
-    orders_df = pd.read_sql(orders_query, conn)
-    products_df = pd.read_sql(products_query, conn)
-    conn.close()
-    
     return orders_df, products_df
 
 def build_interaction_matrix(orders_df):
@@ -90,8 +73,8 @@ def build_interaction_matrix(orders_df):
         ["user_id", "product_id"]
     )["interaction_strength"].sum().reset_index()
     
-    user_ids = interactions["user_id"].unique().tolist()
-    product_ids = interactions["product_id"].unique().tolist()
+    user_ids = interactions["user_id"].astype(str).unique().tolist()
+    product_ids = interactions["product_id"].astype(str).unique().tolist()
     
     user_index = {uid: i for i, uid in enumerate(user_ids)}
     product_index = {pid: i for i, pid in enumerate(product_ids)}
@@ -99,9 +82,9 @@ def build_interaction_matrix(orders_df):
     matrix = np.zeros((len(user_ids), len(product_ids)))
     
     for _, row in interactions.iterrows():
-        u = user_index[row["user_id"]]
-        p = product_index[row["product_id"]]
-        matrix[u][p] = row["interaction_strength"]
+        u = user_index[str(row["user_id"])]
+        p = product_index[str(row["product_id"])]
+        matrix[u][p] = np.log1p(float(row["interaction_strength"]))
     
     return matrix, user_index, product_index
 
@@ -125,113 +108,94 @@ def train_collaborative_model(matrix):
     
     return svd, user_factors_norm, item_factors_norm
 
-    if matrix is None or matrix.shape[0] < 2:
-        print("Not enough data for collaborative filtering")
-        return None
-    
-    n_components = min(10, min(matrix.shape) - 1)
-    svd = TruncatedSVD(n_components=n_components, random_state=42)
-    user_factors = svd.fit_transform(matrix)
-    item_factors = svd.components_.T
-    
-    # Normalize for cosine similarity
-    user_factors_norm = normalize(user_factors)
-    item_factors_norm = normalize(item_factors)
-    
-    return svd, user_factors_norm, item_factors_norm
+def parse_tags(raw_tags):
+    if isinstance(raw_tags, list):
+        return [str(tag) for tag in raw_tags]
+    if isinstance(raw_tags, str):
+        try:
+            parsed = json.loads(raw_tags)
+            if isinstance(parsed, list):
+                return [str(tag) for tag in parsed]
+        except json.JSONDecodeError:
+            return [raw_tags]
+    return []
 
-def build_content_features(products_df):
-    """Build content-based features from product metadata"""
-    features = []
-    
-    for _, product in products_df.iterrows():
-        tags = product["tags"] if isinstance(product["tags"], list) else []
-        category = product["category_name"] or ""
-        
-        feature_vector = {
-            "id": product["id"],
-            "name": product["name"],
-            "price_normalized": float(product["price"]) / 1000.0,
-            "category": category,
-            "tags": tags,
-        }
-        features.append(feature_vector)
-    
-    return features
+def build_product_text(product):
+    tags = parse_tags(product.get("tags"))
+    parts = [
+        product.get("name") or "",
+        product.get("description") or "",
+        product.get("category_name") or "",
+        product.get("store_name") or "",
+        " ".join(tags),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+def build_content_model(products_df):
+    """Build TF-IDF vectors for product metadata used by content and hybrid ranking."""
+    if products_df.empty:
+        return None, None, []
+
+    product_text = products_df.apply(build_product_text, axis=1)
+    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), min_df=1)
+    content_matrix = vectorizer.fit_transform(product_text)
+    content_matrix = normalize(content_matrix)
+    product_ids = products_df["id"].astype(str).tolist()
+
+    return vectorizer, content_matrix, product_ids
+
+def build_popularity_scores(orders_df, products_df):
+    product_ids = products_df["id"].astype(str).tolist()
+    if not product_ids:
+        return {}
+
+    created_rank = {
+        product_id: score
+        for product_id, score in zip(
+            product_ids,
+            np.linspace(1.0, 0.1, num=len(product_ids), endpoint=True),
+        )
+    }
+
+    if orders_df.empty:
+        return created_rank
+
+    sales = orders_df.groupby("product_id")["interaction_strength"].sum()
+    max_sales = float(sales.max()) if not sales.empty else 0.0
+
+    scores = {}
+    for product_id in product_ids:
+        sale_score = float(sales.get(product_id, 0.0)) / max_sales if max_sales else 0.0
+        scores[product_id] = 0.8 * sale_score + 0.2 * created_rank.get(product_id, 0.0)
+    return scores
 
 def get_content_recommendations(product_id, products_df, n=5):
-    # Convert product_id to string for comparison
     product_id = str(product_id)
-    
-    # Convert dataframe ids to strings for comparison
+
     products_df = products_df.copy()
     products_df["id_str"] = products_df["id"].astype(str)
-    
-    target = products_df[products_df["id_str"] == product_id]
-    if target.empty:
-        print(f"Product {product_id} not found in dataframe")
-        print(f"Available ids: {products_df['id_str'].tolist()[:3]}")
+
+    vectorizer, content_matrix, product_ids = build_content_model(products_df)
+    if content_matrix is None or product_id not in product_ids:
         return []
 
-    target = target.iloc[0]
-    target_tags = set(target["tags"] if isinstance(target["tags"], list) else [])
-    target_category = target["category_name"]
+    target_idx = product_ids.index(product_id)
+    content_scores = (content_matrix @ content_matrix[target_idx].T).toarray().ravel()
 
-    scores = []
+    target_price = float(products_df.loc[products_df["id_str"] == product_id, "price"].iloc[0] or 0)
+    price_scores = []
     for _, product in products_df.iterrows():
-        if str(product["id"]) == product_id:
-            continue
+        price = float(product["price"] or 0)
+        if target_price <= 0 or price <= 0:
+            price_scores.append(0.0)
+        else:
+            price_scores.append(max(0.0, 1.0 - abs(np.log(price / target_price))))
 
-        score = 0
-        if product["category_name"] == target_category:
-            score += 2
+    scores = 0.85 * content_scores + 0.15 * np.array(price_scores)
+    scores[target_idx] = -1
 
-        product_tags = set(product["tags"] if isinstance(product["tags"], list) else [])
-        overlap = len(target_tags & product_tags)
-        score += overlap
-
-        price_ratio = float(product["price"]) / max(float(target["price"]), 0.01)
-        if 0.5 <= price_ratio <= 1.5:
-            score += 1
-
-        scores.append((str(product["id"]), score))
-
-    scores.sort(key=lambda x: x[1], reverse=True)
-    return [pid for pid, score in scores[:n] if score > 0]
-
-    """Simple content-based: find products in same category with similar tags"""
-    target = products_df[products_df["id"] == product_id]
-    if target.empty:
-        return []
-    
-    target = target.iloc[0]
-    target_tags = set(target["tags"] if isinstance(target["tags"], list) else [])
-    target_category = target["category_name"]
-    
-    scores = []
-    for _, product in products_df.iterrows():
-        if product["id"] == product_id:
-            continue
-        
-        score = 0
-        # Category match
-        if product["category_name"] == target_category:
-            score += 2
-        
-        # Tag overlap
-        product_tags = set(product["tags"] if isinstance(product["tags"], list) else [])
-        overlap = len(target_tags & product_tags)
-        score += overlap
-        
-        # Price similarity (within 50% of target price)
-        price_ratio = float(product["price"]) / max(float(target["price"]), 0.01)
-        if 0.5 <= price_ratio <= 1.5:
-            score += 1
-        
-        scores.append((product["id"], score))
-    
-    scores.sort(key=lambda x: x[1], reverse=True)
-    return [pid for pid, _ in scores[:n] if _ > 0]
+    top_indices = np.argsort(scores)[::-1]
+    return [product_ids[i] for i in top_indices[:n] if scores[i] > 0]
 
 def train_and_save():
     print("Fetching data from database...")
@@ -242,6 +206,8 @@ def train_and_save():
     
     # Build interaction matrix
     matrix, user_index, product_index = build_interaction_matrix(orders_df)
+    user_index = user_index or {}
+    product_index = product_index or {}
     
     # Train collaborative filtering model
     collab_model = None
@@ -259,7 +225,8 @@ def train_and_save():
     
     # Build content features
     print("Building content features...")
-    content_features = build_content_features(products_df)
+    content_vectorizer, content_matrix, content_product_ids = build_content_model(products_df)
+    popularity_scores = build_popularity_scores(orders_df, products_df)
     
     # Save everything
     model_data = {
@@ -269,13 +236,18 @@ def train_and_save():
         "user_index": user_index,
         "product_index": product_index,
         "products_df": products_df,
-        "content_features": content_features,
+        "interactions_df": orders_df,
+        "content_vectorizer": content_vectorizer,
+        "content_matrix": content_matrix,
+        "content_product_ids": content_product_ids,
+        "popularity_scores": popularity_scores,
+        "method": "hybrid_collaborative_content",
     }
     
-    with open("model.pkl", "wb") as f:
+    with open(MODEL_PATH, "wb") as f:
         pickle.dump(model_data, f)
     
-    print("Model saved to model.pkl")
+    print(f"Model saved to {MODEL_PATH}")
     
     # Quick evaluation
     if matrix is not None and collab_model is not None:

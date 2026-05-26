@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 import { ordersApi } from "@/lib/api";
 import { useCartStore } from "@/lib/store";
 import Cookies from "js-cookie";
@@ -32,6 +33,14 @@ export default function CartPage() {
   const [items, setItems] = useState<CartItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const handleUnauthorized = () => {
+    Cookies.remove("access_token");
+    Cookies.remove("refresh_token");
+    setItemCount(0);
+    router.push("/login");
+  };
 
   useEffect(() => {
     if (!Cookies.get("access_token")) {
@@ -43,24 +52,52 @@ export default function CartPage() {
 
   const fetchCart = async () => {
     try {
+      setError("");
       const res = await ordersApi.getCart();
       setItems(res.data.items);
       setTotal(res.data.total);
       setItemCount(res.data.item_count);
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setError("Failed to load your cart. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   const handleRemove = async (id: string) => {
-    await ordersApi.removeFromCart(id);
-    fetchCart();
+    try {
+      setError("");
+      await ordersApi.removeFromCart(id);
+      await fetchCart();
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setError("Failed to remove item. Please try again.");
+    }
   };
 
   const handleQuantityChange = async (id: string, quantity: number) => {
     if (quantity < 1) return;
-    await ordersApi.updateCartItem(id, quantity);
-    fetchCart();
+    try {
+      setError("");
+      await ordersApi.updateCartItem(id, quantity);
+      await fetchCart();
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const data = axios.isAxiosError(err)
+        ? err.response?.data as { error?: string } | undefined
+        : undefined;
+      setError(data?.error || "Failed to update item quantity. Please try again.");
+    }
   };
 
   const handleCheckout = () => {
@@ -80,9 +117,17 @@ export default function CartPage() {
     </div>
   );
 
+  const hasStockIssue = items.some(item => item.quantity > item.stock_quantity);
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Your cart</h1>
+
+      {error && (
+        <p className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-3 mb-4">
+          {error}
+        </p>
+      )}
 
       <div className="space-y-4 mb-8">
         {items.map(item => {
@@ -100,6 +145,9 @@ export default function CartPage() {
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-gray-900 truncate">{item.name}</p>
                 <p className="text-sm text-gray-500">{item.store_name}</p>
+                <p className={`text-xs mt-1 ${item.quantity > item.stock_quantity ? "text-red-500" : "text-gray-400"}`}>
+                  {item.stock_quantity > 0 ? `${item.stock_quantity} in stock` : "Out of stock"}
+                </p>
                 <p className="text-blue-600 font-semibold text-sm mt-1">
                   ${Number(item.price).toFixed(2)}
                 </p>
@@ -116,7 +164,8 @@ export default function CartPage() {
                   <span className="px-3 py-1 text-sm">{item.quantity}</span>
                   <button
                     onClick={() => handleQuantityChange(item.id, item.quantity + 1)}
-                    className="px-2 py-1 text-gray-600 hover:bg-gray-50 rounded-r-lg text-sm"
+                    disabled={item.quantity >= item.stock_quantity}
+                    className="px-2 py-1 text-gray-600 hover:bg-gray-50 rounded-r-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     +
                   </button>
@@ -145,10 +194,16 @@ export default function CartPage() {
         </div>
         <button
           onClick={handleCheckout}
-          className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-medium"
+          disabled={hasStockIssue}
+          className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Proceed to Checkout
         </button>
+        {hasStockIssue && (
+          <p className="text-sm text-red-500 text-center mt-3">
+            Reduce item quantities to match available stock before checkout.
+          </p>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { use, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { productsApi, ordersApi, recommendApi } from "@/lib/api";
 import { useAuthStore, useCartStore } from "@/lib/store";
@@ -37,8 +37,12 @@ function getImageUrl(images: any[] | undefined, productId: string, size: string 
   return `https://picsum.photos/seed/${productId}/${size}`;
 }
 
-export default function ProductDetailPage() {
-  const { id } = useParams<{ id: string }>();
+export default function ProductDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = use(params);
   const router = useRouter();
   const { user } = useAuthStore();
   const { increment } = useCartStore();
