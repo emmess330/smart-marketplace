@@ -94,6 +94,13 @@ export const ordersApi = {
 
   getOrder: (id: string) =>
     axios.get(`${ORDERS_URL}/orders/${id}`, { headers: authHeaders() }),
+
+  createPaymentIntent: () =>
+    axios.post(
+      `${ORDERS_URL}/orders/create-payment-intent`,
+      {},
+      { headers: authHeaders() },
+    ),
 };
 
 export const usersApi = {

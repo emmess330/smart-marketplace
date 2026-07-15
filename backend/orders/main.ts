@@ -3,10 +3,177 @@ import { z } from "zod";
 import { query } from "../shared/db.ts";
 import { authMiddleware } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
-import Stripe from "https://esm.sh/stripe@14.21.0";
 
-const app = new Hono();
+type AppVariables = {
+  userId: string;
+  role: string;
+};
+
+const app = new Hono<{ Variables: AppVariables }>();
 app.use("*", corsConfig);
+
+type StripePaymentIntent = {
+  id: string;
+  object: string;
+  amount?: number;
+  currency?: string;
+  status: string;
+  metadata?: Record<string, string>;
+};
+
+type StripeWebhookEvent = {
+  id: string;
+  type: string;
+  data?: {
+    object?: unknown;
+  };
+};
+
+const WEBHOOK_TOLERANCE_SECONDS = 300;
+
+function getStripeSecretKey() {
+  const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+  if (!stripeSecretKey || stripeSecretKey.includes("your_key")) {
+    return null;
+  }
+
+  return stripeSecretKey;
+}
+
+function paymentIntentStatusToOrderStatus(status: string) {
+  switch (status) {
+    case "succeeded":
+      return "confirmed";
+    case "processing":
+      return "processing";
+    case "requires_payment_method":
+      return "payment_failed";
+    case "canceled":
+      return "cancelled";
+    case "requires_action":
+    case "requires_capture":
+    case "requires_confirmation":
+      return "pending";
+    default:
+      return "pending";
+  }
+}
+
+function timingSafeEqual(a: string, b: string) {
+  const maxLength = Math.max(a.length, b.length);
+  let mismatch = a.length ^ b.length;
+
+  for (let i = 0; i < maxLength; i += 1) {
+    mismatch |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+
+  return mismatch === 0;
+}
+
+async function hmacSha256Hex(secret: string, payload: string) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(payload),
+  );
+
+  return Array.from(new Uint8Array(signature))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function verifyStripeWebhookSignature(
+  payload: string,
+  signatureHeader: string,
+  endpointSecret: string,
+) {
+  const parts = signatureHeader.split(",");
+  const timestamp = parts
+    .map((part) => part.split("="))
+    .find(([key]) => key === "t")?.[1];
+  const signatures = parts
+    .map((part) => part.split("="))
+    .filter(([key]) => key === "v1")
+    .map(([, value]) => value);
+
+  if (!timestamp || signatures.length === 0) {
+    throw new Error("Invalid Stripe-Signature header");
+  }
+
+  const timestampSeconds = Number(timestamp);
+  if (
+    !Number.isFinite(timestampSeconds) ||
+    Math.abs(Date.now() / 1000 - timestampSeconds) > WEBHOOK_TOLERANCE_SECONDS
+  ) {
+    throw new Error("Stripe webhook timestamp is outside tolerance");
+  }
+
+  const expectedSignature = await hmacSha256Hex(
+    endpointSecret,
+    `${timestamp}.${payload}`,
+  );
+
+  if (
+    !signatures.some((signature) =>
+      timingSafeEqual(signature, expectedSignature)
+    )
+  ) {
+    throw new Error("Stripe webhook signature verification failed");
+  }
+}
+
+async function fetchPaymentIntent(paymentIntentId: string) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
+    throw new Error("STRIPE_SECRET_KEY not set or placeholder");
+  }
+
+  const response = await fetch(
+    `https://api.stripe.com/v1/payment_intents/${
+      encodeURIComponent(paymentIntentId)
+    }`,
+    {
+      headers: {
+        "Authorization": `Bearer ${stripeSecretKey}`,
+      },
+    },
+  );
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.error?.message || "Unable to read Stripe payment intent",
+    );
+  }
+
+  return data as StripePaymentIntent;
+}
+
+async function updateOrderStatusFromPaymentIntent(
+  paymentIntent: StripePaymentIntent,
+) {
+  const orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
+  const result = await query(
+    `UPDATE orders
+     SET status = $1
+     WHERE stripe_payment_id = $2 AND status IS DISTINCT FROM $1
+     RETURNING id, status`,
+    [orderStatus, paymentIntent.id],
+  );
+
+  return {
+    orderStatus,
+    updatedOrders: result.rows,
+  };
+}
 
 const addToCartSchema = z.object({
   product_id: z.string().uuid(),
@@ -25,6 +192,80 @@ const checkoutSchema = z.object({
   stripe_payment_id: z.string().optional(),
 });
 
+type CartCheckoutItem = Record<string, unknown>;
+
+async function getCheckoutCartItems(userId: string) {
+  const cartResult = await query(
+    `SELECT ci.quantity, p.id as product_id, p.price, p.stock_quantity, p.name
+     FROM cart_items ci
+     JOIN products p ON ci.product_id = p.id
+     WHERE ci.user_id = $1 AND p.is_active = true`,
+    [userId],
+  );
+
+  return cartResult.rows as CartCheckoutItem[];
+}
+
+function calculateCartTotal(cartItems: CartCheckoutItem[]) {
+  const total = cartItems.reduce((sum, item) => {
+    return sum + (Number(item.price) * Number(item.quantity));
+  }, 0);
+
+  return Math.round(total * 100) / 100;
+}
+
+// POST /orders/stripe/webhook — Stripe webhook for payment status changes
+app.post("/orders/stripe/webhook", async (c) => {
+  try {
+    const endpointSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
+    if (!endpointSecret || endpointSecret.includes("your_key")) {
+      console.error("STRIPE_WEBHOOK_SECRET not set or placeholder");
+      return c.json({ error: "Stripe webhook not configured" }, 500);
+    }
+
+    const signature = c.req.header("stripe-signature");
+    if (!signature) {
+      return c.json({ error: "Missing Stripe-Signature header" }, 400);
+    }
+
+    const payload = await c.req.text();
+    await verifyStripeWebhookSignature(payload, signature, endpointSecret);
+
+    const event = JSON.parse(payload) as StripeWebhookEvent;
+    const stripeObject = event.data?.object as StripePaymentIntent | undefined;
+
+    if (
+      !event.type.startsWith("payment_intent.") ||
+      stripeObject?.object !== "payment_intent" ||
+      !stripeObject.id
+    ) {
+      return c.json({ received: true, ignored: true });
+    }
+
+    const { orderStatus, updatedOrders } =
+      await updateOrderStatusFromPaymentIntent(
+        stripeObject,
+      );
+
+    if (updatedOrders.length === 0) {
+      console.warn(
+        `No order found for Stripe payment intent ${stripeObject.id}`,
+      );
+    }
+
+    return c.json({
+      received: true,
+      payment_intent: stripeObject.id,
+      payment_status: stripeObject.status,
+      order_status: orderStatus,
+      updated_orders: updatedOrders.length,
+    });
+  } catch (err) {
+    console.error("Stripe webhook error:", err);
+    return c.json({ error: "Invalid Stripe webhook" }, 400);
+  }
+});
+
 // ── CART ROUTES ──────────────────────────────────────────
 
 // GET /cart — get current user's cart
@@ -41,7 +282,7 @@ app.get("/cart", authMiddleware, async (c) => {
        JOIN sellers s ON p.seller_id = s.id
        WHERE ci.user_id = $1 AND p.is_active = true
        ORDER BY ci.created_at DESC`,
-      [userId]
+      [userId],
     );
 
     const items = result.rows as Record<string, unknown>[];
@@ -69,8 +310,11 @@ app.post("/cart", authMiddleware, async (c) => {
 
     // Check product exists and has stock
     const productResult = await query(
-      "SELECT id, stock_quantity FROM products WHERE id = $1 AND is_active = true",
-      [data.product_id]
+      `SELECT p.id, p.name, p.stock_quantity, COALESCE(ci.quantity, 0) as cart_quantity
+       FROM products p
+       LEFT JOIN cart_items ci ON ci.product_id = p.id AND ci.user_id = $2
+       WHERE p.id = $1 AND p.is_active = true`,
+      [data.product_id, userId],
     );
 
     if (productResult.rows.length === 0) {
@@ -78,8 +322,12 @@ app.post("/cart", authMiddleware, async (c) => {
     }
 
     const product = productResult.rows[0] as Record<string, unknown>;
-    if (Number(product.stock_quantity) < data.quantity) {
-      return c.json({ error: "Insufficient stock" }, 400);
+    const nextQuantity = Number(product.cart_quantity) + data.quantity;
+    if (Number(product.stock_quantity) < nextQuantity) {
+      return c.json({
+        error: `Insufficient stock for ${product.name}`,
+        available: Number(product.stock_quantity),
+      }, 400);
     }
 
     // Upsert — if already in cart, update quantity
@@ -89,7 +337,7 @@ app.post("/cart", authMiddleware, async (c) => {
        ON CONFLICT (user_id, product_id)
        DO UPDATE SET quantity = cart_items.quantity + EXCLUDED.quantity
        RETURNING *`,
-      [userId, data.product_id, data.quantity]
+      [userId, data.product_id, data.quantity],
     );
 
     return c.json({ cart_item: result.rows[0] }, 201);
@@ -113,16 +361,32 @@ app.put("/cart/:id", authMiddleware, async (c) => {
       return c.json({ error: "Quantity must be at least 1" }, 400);
     }
 
+    const cartItemResult = await query(
+      `SELECT ci.id, p.name, p.stock_quantity
+       FROM cart_items ci
+       JOIN products p ON ci.product_id = p.id
+       WHERE ci.id = $1 AND ci.user_id = $2 AND p.is_active = true`,
+      [id, userId],
+    );
+
+    if (cartItemResult.rows.length === 0) {
+      return c.json({ error: "Cart item not found" }, 404);
+    }
+
+    const cartItem = cartItemResult.rows[0] as Record<string, unknown>;
+    if (quantity > Number(cartItem.stock_quantity)) {
+      return c.json({
+        error: `Insufficient stock for ${cartItem.name}`,
+        available: Number(cartItem.stock_quantity),
+      }, 400);
+    }
+
     const result = await query(
       `UPDATE cart_items SET quantity = $1
        WHERE id = $2 AND user_id = $3
        RETURNING *`,
-      [quantity, id, userId]
+      [quantity, id, userId],
     );
-
-    if (result.rows.length === 0) {
-      return c.json({ error: "Cart item not found" }, 404);
-    }
 
     return c.json({ cart_item: result.rows[0] });
   } catch (err) {
@@ -139,7 +403,7 @@ app.delete("/cart/:id", authMiddleware, async (c) => {
 
     const result = await query(
       "DELETE FROM cart_items WHERE id = $1 AND user_id = $2 RETURNING id",
-      [id, userId]
+      [id, userId],
     );
 
     if (result.rows.length === 0) {
@@ -174,20 +438,11 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
     const body = await c.req.json();
     const data = checkoutSchema.parse(body);
 
-    // Get cart items
-    const cartResult = await query(
-      `SELECT ci.quantity, p.id as product_id, p.price, p.stock_quantity, p.name
-       FROM cart_items ci
-       JOIN products p ON ci.product_id = p.id
-       WHERE ci.user_id = $1 AND p.is_active = true`,
-      [userId]
-    );
+    const cartItems = await getCheckoutCartItems(userId);
 
-    if (cartResult.rows.length === 0) {
+    if (cartItems.length === 0) {
       return c.json({ error: "Cart is empty" }, 400);
     }
-
-    const cartItems = cartResult.rows as Record<string, unknown>[];
 
     // Verify stock for all items
     for (const item of cartItems) {
@@ -198,22 +453,57 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       }
     }
 
-    // Calculate total
-    const total = cartItems.reduce((sum, item) => {
-      return sum + (Number(item.price) * Number(item.quantity));
-    }, 0);
+    const totalAmount = calculateCartTotal(cartItems);
+    const expectedStripeAmount = Math.round(totalAmount * 100);
+    let orderStatus = "confirmed";
+
+    if (data.stripe_payment_id) {
+      const paymentIntent = await fetchPaymentIntent(data.stripe_payment_id);
+
+      if (
+        paymentIntent.metadata?.user_id &&
+        paymentIntent.metadata.user_id !== String(userId)
+      ) {
+        return c.json(
+          { error: "Payment intent does not belong to this user" },
+          403,
+        );
+      }
+
+      if (
+        paymentIntent.amount !== expectedStripeAmount ||
+        paymentIntent.currency?.toLowerCase() !== "gbp"
+      ) {
+        return c.json({
+          error: "Payment intent does not match this order total",
+        }, 400);
+      }
+
+      if (paymentIntent.status !== "succeeded") {
+        return c.json(
+          {
+            error: "Payment has not succeeded",
+            payment_status: paymentIntent.status,
+          },
+          402,
+        );
+      }
+
+      orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
+    }
 
     // Create order
     const orderResult = await query(
       `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
-       VALUES ($1, $2, $3, $4, 'confirmed')
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
       [
         userId,
-        Math.round(total * 100) / 100,
+        totalAmount,
         JSON.stringify(data.shipping_address),
         data.stripe_payment_id || null,
-      ]
+        orderStatus,
+      ],
     );
 
     const order = orderResult.rows[0] as Record<string, unknown>;
@@ -223,12 +513,12 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       await query(
         `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
          VALUES ($1, $2, $3, $4)`,
-        [order.id, item.product_id, item.quantity, item.price]
+        [order.id, item.product_id, item.quantity, item.price],
       );
 
       await query(
         `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
-        [item.quantity, item.product_id]
+        [item.quantity, item.product_id],
       );
     }
 
@@ -264,7 +554,7 @@ app.get("/orders", authMiddleware, async (c) => {
        WHERE o.user_id = $1
        GROUP BY o.id
        ORDER BY o.created_at DESC`,
-      [userId]
+      [userId],
     );
 
     return c.json({ orders: result.rows });
@@ -294,7 +584,7 @@ app.get("/orders/:id", authMiddleware, async (c) => {
        JOIN products p ON oi.product_id = p.id
        WHERE o.id = $1 AND o.user_id = $2
        GROUP BY o.id`,
-      [id, userId]
+      [id, userId],
     );
 
     if (result.rows.length === 0) {
@@ -308,7 +598,6 @@ app.get("/orders/:id", authMiddleware, async (c) => {
   }
 });
 
-
 // GET /seller/analytics — seller sales overview
 app.get("/seller/analytics", authMiddleware, async (c) => {
   try {
@@ -321,7 +610,7 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
 
     const sellerResult = await query(
       "SELECT id FROM sellers WHERE user_id = $1",
-      [userId]
+      [userId],
     );
 
     if (sellerResult.rows.length === 0) {
@@ -341,7 +630,7 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
        JOIN orders o ON oi.order_id = o.id
        JOIN products p ON oi.product_id = p.id
        WHERE p.seller_id = $1 AND o.status = 'confirmed'`,
-      [sellerId]
+      [sellerId],
     );
 
     // Daily revenue for last 30 days
@@ -358,7 +647,7 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
          AND o.created_at >= NOW() - INTERVAL '30 days'
        GROUP BY DATE(o.created_at)
        ORDER BY date ASC`,
-      [sellerId]
+      [sellerId],
     );
 
     // Top products by revenue
@@ -374,7 +663,7 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
        GROUP BY p.id, p.name, p.price, p.stock_quantity
        ORDER BY revenue DESC
        LIMIT 5`,
-      [sellerId]
+      [sellerId],
     );
 
     // Low stock alert
@@ -383,54 +672,88 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
        FROM products
        WHERE seller_id = $1 AND is_active = true AND stock_quantity < 10
        ORDER BY stock_quantity ASC`,
-      [sellerId]
+      [sellerId],
     );
 
     const overview = overviewResult.rows[0] as Record<string, unknown>;
 
-return c.json({
-  overview: {
-    total_orders: Number(overview.total_orders),
-    total_revenue: Number(overview.total_revenue),
-    total_units_sold: Number(overview.total_units_sold),
-  },
-  daily_revenue: (dailyResult.rows as Record<string, unknown>[]).map(row => ({
-    date: row.date,
-    revenue: Number(row.revenue),
-    orders: Number(row.orders),
-  })),
-  top_products: (topProductsResult.rows as Record<string, unknown>[]).map(row => ({
-    id: row.id,
-    name: row.name,
-    price: Number(row.price),
-    stock_quantity: Number(row.stock_quantity),
-    units_sold: Number(row.units_sold),
-    revenue: Number(row.revenue),
-  })),
-  low_stock: lowStockResult.rows,
-});
+    return c.json({
+      overview: {
+        total_orders: Number(overview.total_orders),
+        total_revenue: Number(overview.total_revenue),
+        total_units_sold: Number(overview.total_units_sold),
+      },
+      daily_revenue: (dailyResult.rows as Record<string, unknown>[]).map(
+        (row) => ({
+          date: row.date,
+          revenue: Number(row.revenue),
+          orders: Number(row.orders),
+        }),
+      ),
+      top_products: (topProductsResult.rows as Record<string, unknown>[]).map(
+        (row) => ({
+          id: row.id,
+          name: row.name,
+          price: Number(row.price),
+          stock_quantity: Number(row.stock_quantity),
+          units_sold: Number(row.units_sold),
+          revenue: Number(row.revenue),
+        }),
+      ),
+      low_stock: lowStockResult.rows,
+    });
   } catch (err) {
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
-
 app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
   try {
-    const userId = c.get("userId");
-    const body = await c.req.json();
-    const { amount } = body; // amount in cents
+    const userId = String(c.get("userId"));
+    const cartItems = await getCheckoutCartItems(userId);
 
-    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+    if (cartItems.length === 0) {
+      return c.json({ error: "Cart is empty" }, 400);
+    }
+
+    for (const item of cartItems) {
+      if (Number(item.stock_quantity) < Number(item.quantity)) {
+        return c.json({
+          error: `Insufficient stock for ${item.name}`,
+        }, 400);
+      }
+    }
+
+    const totalAmount = calculateCartTotal(cartItems);
+    const amount = Math.round(totalAmount * 100); // pence for GBP
+
+    if (!Number.isFinite(amount) || amount < 30) {
+      return c.json(
+        {
+          error:
+            "Invalid amount: must be at least 30 pence (£0.30) for GBP card payments.",
+        },
+        400,
+      );
+    }
+
+    const stripeSecretKey = getStripeSecretKey();
     if (!stripeSecretKey) {
-      console.error("STRIPE_SECRET_KEY not set");
-      return c.json({ error: "Payment not configured" }, 500);
+      console.error("STRIPE_SECRET_KEY not set or placeholder");
+      return c.json(
+        {
+          error:
+            "Payment not configured: set STRIPE_SECRET_KEY in backend/.env",
+        },
+        500,
+      );
     }
 
     const params = new URLSearchParams();
-    params.append("amount", String(amount));
+    params.append("amount", String(Math.round(amount)));
     params.append("currency", "gbp");
+    params.append("automatic_payment_methods[enabled]", "true");
     params.append("metadata[user_id]", userId);
 
     const response = await fetch("https://api.stripe.com/v1/payment_intents", {
@@ -448,7 +771,11 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
       return c.json({ error: data.error?.message || "Payment failed" }, 400);
     }
 
-    return c.json({ clientSecret: data.client_secret });
+    return c.json({
+      clientSecret: data.client_secret,
+      amount,
+      total_amount: totalAmount,
+    });
   } catch (err) {
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
