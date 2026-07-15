@@ -14,4 +14,5 @@ URL="${DB_URL:-postgresql://marketplace_user:marketplace_pass@127.0.0.1:5432/mar
 echo "Applying migrations (set DB_URL or backend/.env)..."
 psql "$URL" -v ON_ERROR_STOP=1 -f "$REPO_ROOT/database/migrations/001_init.sql"
 psql "$URL" -f "$REPO_ROOT/database/migrations/002_seed.sql"
+psql "$URL" -v ON_ERROR_STOP=1 -f "$REPO_ROOT/database/migrations/003_orders_payment_unique.sql"
 echo "Migrations finished."

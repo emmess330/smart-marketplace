@@ -189,7 +189,7 @@ const checkoutSchema = z.object({
     country: z.string(),
     postal_code: z.string(),
   }),
-  stripe_payment_id: z.string().optional(),
+  stripe_payment_id: z.string(),
 });
 
 type CartCheckoutItem = Record<string, unknown>;
@@ -455,56 +455,75 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
 
     const totalAmount = calculateCartTotal(cartItems);
     const expectedStripeAmount = Math.round(totalAmount * 100);
-    let orderStatus = "confirmed";
 
-    if (data.stripe_payment_id) {
-      const paymentIntent = await fetchPaymentIntent(data.stripe_payment_id);
+    const paymentIntent = await fetchPaymentIntent(data.stripe_payment_id);
 
-      if (
-        paymentIntent.metadata?.user_id &&
-        paymentIntent.metadata.user_id !== String(userId)
-      ) {
-        return c.json(
-          { error: "Payment intent does not belong to this user" },
-          403,
-        );
-      }
-
-      if (
-        paymentIntent.amount !== expectedStripeAmount ||
-        paymentIntent.currency?.toLowerCase() !== "gbp"
-      ) {
-        return c.json({
-          error: "Payment intent does not match this order total",
-        }, 400);
-      }
-
-      if (paymentIntent.status !== "succeeded") {
-        return c.json(
-          {
-            error: "Payment has not succeeded",
-            payment_status: paymentIntent.status,
-          },
-          402,
-        );
-      }
-
-      orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
+    if (paymentIntent.metadata?.user_id !== String(userId)) {
+      return c.json(
+        { error: "Payment intent does not belong to this user" },
+        403,
+      );
     }
 
-    // Create order
-    const orderResult = await query(
-      `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [
-        userId,
-        totalAmount,
-        JSON.stringify(data.shipping_address),
-        data.stripe_payment_id || null,
-        orderStatus,
-      ],
+    if (
+      paymentIntent.amount !== expectedStripeAmount ||
+      paymentIntent.currency?.toLowerCase() !== "gbp"
+    ) {
+      return c.json({
+        error: "Payment intent does not match this order total",
+      }, 400);
+    }
+
+    if (paymentIntent.status !== "succeeded") {
+      return c.json(
+        {
+          error: "Payment has not succeeded",
+          payment_status: paymentIntent.status,
+        },
+        402,
+      );
+    }
+
+    // Reject reuse of a payment intent that already funded another order.
+    const alreadyUsed = await query(
+      "SELECT id FROM orders WHERE stripe_payment_id = $1",
+      [data.stripe_payment_id],
     );
+    if (alreadyUsed.rows.length > 0) {
+      return c.json(
+        { error: "This payment has already been applied to an order" },
+        409,
+      );
+    }
+
+    const orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
+
+    // Create order
+    let orderResult: Awaited<ReturnType<typeof query>>;
+    try {
+      orderResult = await query(
+        `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [
+          userId,
+          totalAmount,
+          JSON.stringify(data.shipping_address),
+          data.stripe_payment_id,
+          orderStatus,
+        ],
+      );
+    } catch (err) {
+      // Unique constraint on stripe_payment_id is the authoritative guard
+      // against a concurrent request racing the check above.
+      if (err instanceof Error && /unique|duplicate/i.test(err.message)) {
+        return c.json(
+          { error: "This payment has already been applied to an order" },
+          409,
+        );
+      }
+      throw err;
+    }
 
     const order = orderResult.rows[0] as Record<string, unknown>;
 
