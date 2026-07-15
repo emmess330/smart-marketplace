@@ -7,6 +7,9 @@ import { corsConfig } from "../shared/cors.ts";
 const app = new Hono();
 app.use("*", corsConfig);
 
+const ES_URL = Deno.env.get("ES_HOST") || "http://localhost:9200";
+const SEARCH_INDEX = "products";
+
 const productSchema = z.object({
   name: z.string().min(2),
   description: z.string().optional(),
@@ -16,6 +19,76 @@ const productSchema = z.object({
   images: z.array(z.string()).default([]),
   tags: z.array(z.string()).default([]),
 });
+
+async function esRequest(method: string, path: string, body?: unknown) {
+  const res = await fetch(`${ES_URL}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  if (!res.ok && res.status !== 404) {
+    throw new Error(
+      `Elasticsearch ${method} ${path} failed with ${res.status}`,
+    );
+  }
+}
+
+function normalizeArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function getSearchDocument(productId: string) {
+  const result = await query(
+    `SELECT p.id, p.name, p.description, p.price, p.stock_quantity,
+            p.tags, p.is_active, p.created_at, p.seller_id,
+            s.store_name, c.name as category_name
+     FROM products p
+     LEFT JOIN sellers s ON p.seller_id = s.id
+     LEFT JOIN categories c ON p.category_id = c.id
+     WHERE p.id = $1 AND p.is_active = true`,
+    [productId],
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const product = result.rows[0] as Record<string, unknown>;
+  return {
+    id: product.id,
+    name: product.name,
+    description: product.description || "",
+    price: Number(product.price),
+    stock_quantity: Number(product.stock_quantity),
+    category_name: product.category_name || "",
+    store_name: product.store_name || "",
+    seller_id: product.seller_id,
+    tags: normalizeArray(product.tags),
+    is_active: product.is_active,
+    created_at: product.created_at,
+  };
+}
+
+async function syncProductToSearch(productId: string) {
+  try {
+    const document = await getSearchDocument(productId);
+    if (!document) {
+      await esRequest("DELETE", `/${SEARCH_INDEX}/_doc/${productId}`);
+      return;
+    }
+
+    await esRequest("PUT", `/${SEARCH_INDEX}/_doc/${productId}`, document);
+  } catch (err) {
+    console.warn(`Search sync skipped for product ${productId}:`, err);
+  }
+}
 
 // GET /products — public, paginated list (with optional seller filter)
 app.get("/products", async (c) => {
@@ -45,7 +118,9 @@ app.get("/products", async (c) => {
       sql += ` AND p.seller_id = $${params.length}`;
     }
 
-    sql += ` ORDER BY p.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    sql += ` ORDER BY p.created_at DESC LIMIT $${params.length + 1} OFFSET $${
+      params.length + 2
+    }`;
     params.push(limit, offset);
 
     const result = await query(sql, params);
@@ -65,7 +140,9 @@ app.get("/products", async (c) => {
       countSql += ` AND p.seller_id = $${countParams.length}`;
     }
     const countResult = await query(countSql, countParams);
-    const total = Number((countResult.rows[0] as Record<string, unknown>).count);
+    const total = Number(
+      (countResult.rows[0] as Record<string, unknown>).count,
+    );
 
     return c.json({
       products: result.rows,
@@ -83,13 +160,13 @@ app.get("/products/:id", async (c) => {
     const { id } = c.req.param();
 
     const result = await query(
-  `SELECT p.*, s.store_name, c.name as category_name
+      `SELECT p.*, s.store_name, c.name as category_name
    FROM products p
    LEFT JOIN sellers s ON p.seller_id = s.id
    LEFT JOIN categories c ON p.category_id = c.id
    WHERE p.id = $1 AND p.is_active = true`,
-  [id]
-);
+      [id],
+    );
 
     if (result.rows.length === 0) {
       return c.json({ error: "Product not found" }, 404);
@@ -115,7 +192,7 @@ app.post("/products", authMiddleware, async (c) => {
     // Get seller record for this user
     const sellerResult = await query(
       "SELECT id FROM sellers WHERE user_id = $1",
-      [userId]
+      [userId],
     );
 
     if (sellerResult.rows.length === 0) {
@@ -139,8 +216,11 @@ app.post("/products", authMiddleware, async (c) => {
         data.stock_quantity,
         JSON.stringify(data.images),
         JSON.stringify(data.tags),
-      ]
+      ],
     );
+
+    const product = result.rows[0] as Record<string, unknown>;
+    await syncProductToSearch(String(product.id));
 
     return c.json({ product: result.rows[0] }, 201);
   } catch (err) {
@@ -160,7 +240,7 @@ app.put("/products/:id", authMiddleware, async (c) => {
 
     const sellerResult = await query(
       "SELECT id FROM sellers WHERE user_id = $1",
-      [userId]
+      [userId],
     );
 
     if (sellerResult.rows.length === 0) {
@@ -171,7 +251,7 @@ app.put("/products/:id", authMiddleware, async (c) => {
 
     const existing = await query(
       "SELECT id FROM products WHERE id = $1 AND seller_id = $2",
-      [id, seller.id]
+      [id, seller.id],
     );
 
     if (existing.rows.length === 0) {
@@ -184,13 +264,34 @@ app.put("/products/:id", authMiddleware, async (c) => {
     const fields: string[] = [];
     const params: unknown[] = [];
 
-    if (data.name !== undefined) { params.push(data.name); fields.push(`name = $${params.length}`); }
-    if (data.description !== undefined) { params.push(data.description); fields.push(`description = $${params.length}`); }
-    if (data.price !== undefined) { params.push(data.price); fields.push(`price = $${params.length}`); }
-    if (data.stock_quantity !== undefined) { params.push(data.stock_quantity); fields.push(`stock_quantity = $${params.length}`); }
-    if (data.category_id !== undefined) { params.push(data.category_id); fields.push(`category_id = $${params.length}`); }
-    if (data.images !== undefined) { params.push(JSON.stringify(data.images)); fields.push(`images = $${params.length}`); }
-    if (data.tags !== undefined) { params.push(JSON.stringify(data.tags)); fields.push(`tags = $${params.length}`); }
+    if (data.name !== undefined) {
+      params.push(data.name);
+      fields.push(`name = $${params.length}`);
+    }
+    if (data.description !== undefined) {
+      params.push(data.description);
+      fields.push(`description = $${params.length}`);
+    }
+    if (data.price !== undefined) {
+      params.push(data.price);
+      fields.push(`price = $${params.length}`);
+    }
+    if (data.stock_quantity !== undefined) {
+      params.push(data.stock_quantity);
+      fields.push(`stock_quantity = $${params.length}`);
+    }
+    if (data.category_id !== undefined) {
+      params.push(data.category_id);
+      fields.push(`category_id = $${params.length}`);
+    }
+    if (data.images !== undefined) {
+      params.push(JSON.stringify(data.images));
+      fields.push(`images = $${params.length}`);
+    }
+    if (data.tags !== undefined) {
+      params.push(JSON.stringify(data.tags));
+      fields.push(`tags = $${params.length}`);
+    }
 
     if (fields.length === 0) {
       return c.json({ error: "No fields to update" }, 400);
@@ -198,9 +299,13 @@ app.put("/products/:id", authMiddleware, async (c) => {
 
     params.push(id);
     const result = await query(
-      `UPDATE products SET ${fields.join(", ")} WHERE id = $${params.length} RETURNING *`,
-      params
+      `UPDATE products SET ${
+        fields.join(", ")
+      } WHERE id = $${params.length} RETURNING *`,
+      params,
     );
+
+    await syncProductToSearch(id);
 
     return c.json({ product: result.rows[0] });
   } catch (err) {
@@ -220,7 +325,7 @@ app.delete("/products/:id", authMiddleware, async (c) => {
 
     const sellerResult = await query(
       "SELECT id FROM sellers WHERE user_id = $1",
-      [userId]
+      [userId],
     );
 
     if (sellerResult.rows.length === 0) {
@@ -233,12 +338,14 @@ app.delete("/products/:id", authMiddleware, async (c) => {
     const result = await query(
       `UPDATE products SET is_active = false
        WHERE id = $1 AND seller_id = $2 RETURNING id`,
-      [id, seller.id]
+      [id, seller.id],
     );
 
     if (result.rows.length === 0) {
       return c.json({ error: "Product not found or not yours" }, 404);
     }
+
+    await syncProductToSearch(id);
 
     return c.json({ message: "Product deleted" });
   } catch (err) {
@@ -258,7 +365,6 @@ app.get("/categories", async (c) => {
   }
 });
 
-
 // GET /seller/products – get products for authenticated seller
 app.get("/seller/products", authMiddleware, async (c) => {
   try {
@@ -269,7 +375,7 @@ app.get("/seller/products", authMiddleware, async (c) => {
     }
     const sellerResult = await query(
       "SELECT id FROM sellers WHERE user_id = $1",
-      [userId]
+      [userId],
     );
     if (sellerResult.rows.length === 0) {
       return c.json({ error: "Seller profile not found" }, 404);
@@ -281,7 +387,7 @@ app.get("/seller/products", authMiddleware, async (c) => {
        LEFT JOIN categories c ON p.category_id = c.id
        WHERE p.seller_id = $1 AND p.is_active = true
        ORDER BY p.created_at DESC`,
-      [sellerId]
+      [sellerId],
     );
     return c.json({ products: result.rows });
   } catch (err) {

@@ -12,7 +12,9 @@ async function esRequest(method: string, path: string, body?: unknown) {
   const res = await fetch(`${ES_URL}${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
-    body: body ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined,
+    body: body
+      ? (typeof body === "string" ? body : JSON.stringify(body))
+      : undefined,
   });
   if (res.status === 204 || res.headers.get("content-length") === "0") {
     return { status: res.status };
@@ -66,12 +68,17 @@ app.post("/search/index", async (c) => {
        FROM products p
        LEFT JOIN sellers s ON p.seller_id = s.id
        LEFT JOIN categories c ON p.category_id = c.id
-       WHERE p.is_active = true`
+       WHERE p.is_active = true`,
     );
 
     if (result.rows.length === 0) {
+      await esRequest("DELETE", `/${INDEX}`);
+      await createIndex();
       return c.json({ message: "No products to index" });
     }
+
+    await esRequest("DELETE", `/${INDEX}`);
+    await createIndex();
 
     // Bulk index
     const bulkBody = result.rows.flatMap((row) => {
@@ -94,8 +101,10 @@ app.post("/search/index", async (c) => {
       ];
     });
 
-    const bulkResult = await esRequest("POST", "/_bulk", 
-      bulkBody.map(l => JSON.stringify(l)).join("\n") + "\n"
+    const bulkResult = await esRequest(
+      "POST",
+      "/_bulk",
+      bulkBody.map((l) => JSON.stringify(l)).join("\n") + "\n",
     );
 
     return c.json({
@@ -111,7 +120,7 @@ app.post("/search/index", async (c) => {
 // GET /search?q=&category=&min_price=&max_price=&page=&limit=
 app.get("/search", async (c) => {
   try {
-    const q = c.req.query("q") || "";
+    const q = (c.req.query("q") || "").trim();
     const category = c.req.query("category") || "";
     const minPrice = Number(c.req.query("min_price") || 0);
     const maxPrice = Number(c.req.query("max_price") || 999999);
@@ -119,29 +128,71 @@ app.get("/search", async (c) => {
     const limit = Number(c.req.query("limit") || 12);
     const from = (page - 1) * limit;
 
-    const must: unknown[] = [
+    const filter: unknown[] = [
       { term: { is_active: true } },
       { range: { price: { gte: minPrice, lte: maxPrice } } },
     ];
 
-    if (q) {
-      must.push({
+    if (category) {
+      filter.push({ term: { category_name: category } });
+    }
+
+    const words = q.split(/\s+/).filter(Boolean);
+    const should: unknown[] = q
+      ? [
+        { term: { category_name: { value: q, boost: 8 } } },
+        { term: { category_name: { value: q.toLowerCase(), boost: 8 } } },
+        {
+          multi_match: {
+            query: q,
+            fields: ["name^6", "description^3", "tags^2", "store_name"],
+            operator: "and",
+          },
+        },
+        {
+          multi_match: {
+            query: q,
+            fields: ["name^5", "description^2"],
+            type: "phrase_prefix",
+          },
+        },
+      ]
+      : [];
+
+    if (q.length >= 4) {
+      should.push({
         multi_match: {
           query: q,
-          fields: ["name^3", "description", "tags^2"],
-          fuzziness: "AUTO",
+          fields: [
+            "name^4",
+            "description^2",
+            "tags^2",
+            "category_name^2",
+            "store_name",
+          ],
+          fuzziness: q.length <= 6 ? 2 : "AUTO",
+          prefix_length: 0,
+          max_expansions: 20,
         },
       });
     }
 
-    if (category) {
-      must.push({ term: { category_name: category } });
-    }
+    const query = q
+      ? {
+        bool: {
+          filter,
+          should,
+          minimum_should_match: 1,
+        },
+      }
+      : { bool: { filter } };
+    const minScore = q.length >= 4 && words.length === 1 ? 16 : undefined;
 
     const esQuery = {
       from,
       size: limit,
-      query: { bool: { must } },
+      ...(minScore ? { min_score: minScore } : {}),
+      query,
       sort: q ? ["_score"] : [{ created_at: "desc" }],
       aggs: {
         categories: {
@@ -183,23 +234,47 @@ app.get("/search", async (c) => {
 // GET /search/suggest?q= — autocomplete
 app.get("/search/suggest", async (c) => {
   try {
-    const q = c.req.query("q") || "";
+    const q = (c.req.query("q") || "").trim();
     if (!q) return c.json({ suggestions: [] });
+    const should: unknown[] = [
+      { term: { category_name: { value: q, boost: 8 } } },
+      { term: { category_name: { value: q.toLowerCase(), boost: 8 } } },
+      {
+        multi_match: {
+          query: q,
+          fields: ["name^5", "description"],
+          type: "phrase_prefix",
+        },
+      },
+    ];
+
+    if (q.length >= 4) {
+      should.push({
+        multi_match: {
+          query: q,
+          fields: ["name^4", "description", "tags^2"],
+          fuzziness: q.length <= 6 ? 2 : "AUTO",
+          prefix_length: 0,
+          max_expansions: 20,
+        },
+      });
+    }
 
     const result = await esRequest("POST", `/${INDEX}/_search`, {
       size: 5,
+      ...(q.length >= 4 && !q.includes(" ") ? { min_score: 16 } : {}),
       query: {
-        multi_match: {
-          query: q,
-          fields: ["name^3", "tags"],
-          type: "phrase_prefix",
+        bool: {
+          filter: [{ term: { is_active: true } }],
+          should,
+          minimum_should_match: 1,
         },
       },
       _source: ["id", "name", "price"],
     });
 
     const suggestions = (result.hits?.hits || []).map(
-      (h: Record<string, unknown>) => h._source
+      (h: Record<string, unknown>) => h._source,
     );
 
     return c.json({ suggestions });
