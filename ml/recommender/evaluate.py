@@ -1,15 +1,13 @@
+import sys
+from pathlib import Path
+
 import pickle
 import numpy as np
 import pandas as pd
 import psycopg2
 
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "database": "marketplace",
-    "user": "marketplace_user",
-    "password": "marketplace_pass"
-}
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from db_config import get_psycopg2_kwargs
 
 def precision_at_k(recommended, relevant, k):
     recommended_k = recommended[:k]
@@ -42,7 +40,7 @@ def evaluate_model():
     print(f"Latent factors: {user_factors.shape[1]}")
     
     # Fetch ground truth
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(**get_psycopg2_kwargs())
     orders_df = pd.read_sql("""
         SELECT o.user_id, oi.product_id
         FROM order_items oi

@@ -6,6 +6,10 @@ import pickle
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from db_config import get_db_url
 
 app = FastAPI(title="Forecasting Service")
 
@@ -17,10 +21,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_URL = "postgresql://marketplace_user:marketplace_pass@localhost:5432/marketplace"
-
 def get_engine():
-    return create_engine(DB_URL)
+    return create_engine(get_db_url())
 
 def get_seller_id(user_id: str):
     engine = get_engine()

@@ -1,13 +1,17 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
 import pickle
 import os
 
-DB_URL = "postgresql://marketplace_user:marketplace_pass@localhost:5432/marketplace"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from db_config import get_db_url
 
 def get_engine():
-    return create_engine(DB_URL)
+    return create_engine(get_db_url())
 
 def fetch_sales_data(seller_id=None):
     engine = get_engine()
