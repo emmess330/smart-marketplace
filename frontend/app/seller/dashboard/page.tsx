@@ -86,11 +86,33 @@ export default function SellerDashboard() {
       .finally(() => setForecastLoading(false));
   }, [user]);
 
-  const maxRevenue = Math.max(
+  const revenueChartMax = Math.max(
     ...dailyRevenue.map(d => Number(d.revenue)),
-    ...forecast.map(f => f.upper),
     1
   );
+  const forecastValues = [
+    ...forecast.flatMap(f => [f.predicted, f.lower, f.upper]),
+    ...historical.map(h => h.actual),
+  ].filter(value => Number.isFinite(value));
+  const rawForecastMin = forecastValues.length ? Math.min(...forecastValues) : 0;
+  const rawForecastMax = forecastValues.length ? Math.max(...forecastValues) : 1;
+  const forecastPadding = Math.max(
+    (rawForecastMax - rawForecastMin) * 0.15,
+    rawForecastMax * 0.05,
+    1
+  );
+  const forecastDomainMin = Math.max(0, rawForecastMin - forecastPadding);
+  const forecastDomainMax = rawForecastMax + forecastPadding;
+  const forecastRange = Math.max(forecastDomainMax - forecastDomainMin, 1);
+  const chartStep = 12;
+  const historicalWidth = historical.length > 0 ? historical.length * chartStep : 0;
+  const forecastChartWidth = Math.max(
+    (historical.length + forecast.length - 1) * chartStep,
+    chartStep
+  );
+  const forecastX = (index: number) => historicalWidth + index * chartStep;
+  const forecastY = (value: number) =>
+    95 - ((value - forecastDomainMin) / forecastRange) * 85;
 
   if (loading) return (
     <div className="max-w-7xl mx-auto px-4 py-8">
@@ -139,8 +161,8 @@ export default function SellerDashboard() {
         ) : (
           <div className="flex items-end gap-1 h-40">
             {dailyRevenue.map((day, i) => {
-              const height = maxRevenue > 0
-                ? (Number(day.revenue) / maxRevenue) * 100
+              const height = revenueChartMax > 0
+                ? (Number(day.revenue) / revenueChartMax) * 100
                 : 0;
               return (
                 <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
@@ -196,21 +218,31 @@ export default function SellerDashboard() {
           <p className="text-gray-400 text-sm text-center py-8">No forecast available</p>
         ) : (
           <div className="relative h-48">
-            <svg width="100%" height="100%" viewBox={`0 0 ${forecast.length * 12} 100`} preserveAspectRatio="none">
+            <svg width="100%" height="100%" viewBox={`0 0 ${forecastChartWidth} 100`} preserveAspectRatio="none">
               {/* Confidence band */}
               <path
                 d={[
-                  `M 0 ${100 - (forecast[0].upper / maxRevenue) * 90}`,
-                  ...forecast.map((f, i) => `L ${i * 12} ${100 - (f.upper / maxRevenue) * 90}`),
-                  ...forecast.slice().reverse().map((f, i) => `L ${(forecast.length - 1 - i) * 12} ${100 - (f.lower / maxRevenue) * 90}`),
+                  `M ${forecastX(0)} ${forecastY(forecast[0].upper)}`,
+                  ...forecast.map((f, i) => `L ${forecastX(i)} ${forecastY(f.upper)}`),
+                  ...forecast.slice().reverse().map((f, i) => `L ${forecastX(forecast.length - 1 - i)} ${forecastY(f.lower)}`),
                   "Z"
                 ].join(" ")}
                 fill="#DBEAFE"
                 opacity="0.6"
               />
+              {historical.length > 0 && (
+                <line
+                  x1={historicalWidth}
+                  y1="5"
+                  x2={historicalWidth}
+                  y2="95"
+                  stroke="#E5E7EB"
+                  strokeWidth="1"
+                />
+              )}
               {/* Forecast line */}
               <polyline
-                points={forecast.map((f, i) => `${i * 12},${100 - (f.predicted / maxRevenue) * 90}`).join(" ")}
+                points={forecast.map((f, i) => `${forecastX(i)},${forecastY(f.predicted)}`).join(" ")}
                 fill="none"
                 stroke="#3B82F6"
                 strokeWidth="1.5"
@@ -218,7 +250,7 @@ export default function SellerDashboard() {
               {/* Historical line */}
               {historical.length > 0 && (
                 <polyline
-                  points={historical.map((h, i) => `${i * 12},${100 - (h.actual / maxRevenue) * 90}`).join(" ")}
+                  points={historical.map((h, i) => `${i * 12},${forecastY(h.actual)}`).join(" ")}
                   fill="none"
                   stroke="#10B981"
                   strokeWidth="1.5"

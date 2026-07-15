@@ -45,7 +45,7 @@
 
 | Task | User Action | Success Criteria | Status |
 |------|-------------|------------------|--------|
-| Mobile PWA install | Open Chrome on Android → Visit deployed URL → Tap "Install app" | App appears on home screen, opens standalone | ☐ |
+| Mobile browser access | Open Chrome on Android → Visit deployed URL | Site loads and remains usable in the browser; PWA install is out of scope | ☐ |
 | Mobile navigation | Tap menu icon on small screen | Mobile menu opens, links work | ☐ |
 | Form validation | Register with invalid email | Error message shown | ☐ |
 | Cart quantity update | Increase/decrease quantity | Cart total updates, item count changes | ☐ |

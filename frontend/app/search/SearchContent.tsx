@@ -111,8 +111,8 @@ export default function SearchContent() {
               value={query}
               onChange={e => handleSuggest(e.target.value)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-              placeholder="Search products..."
-              className="w-full border border-gray-200 rounded-xl px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Browse products"
+              className="w-full border border-gray-200 rounded-xl px-5 py-3 text-sm placeholder:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             {showSuggestions && suggestions.length > 0 && (
               <div className="absolute top-full left-0 right-0 bg-white border border-gray-100 rounded-xl shadow-lg z-10 mt-1">
