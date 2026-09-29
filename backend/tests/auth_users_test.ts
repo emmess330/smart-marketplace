@@ -125,6 +125,56 @@ Deno.test({ name: "auth + users services", ...suiteOptions }, async (t) => {
       assertEquals(stores.rows.length, 1);
     });
 
+    const refresh = (refreshToken: unknown) =>
+      api("POST", `${AUTH}/auth/refresh`, { body: { refreshToken } });
+
+    await t.step("refresh: returns a working token pair and consumes the old refresh token", async () => {
+      const reg = await register("refresh");
+      const res = await refresh(reg.body.refreshToken);
+      assertEquals(res.status, 200);
+      assertEquals(res.body.user.email, fx.email("refresh"));
+      assertEquals((await api("GET", `${AUTH}/auth/me`, { token: res.body.accessToken })).status, 200);
+
+      // Rotation: the old refresh token no longer works; the new one does.
+      assertEquals((await refresh(reg.body.refreshToken)).status, 401);
+      assertEquals((await refresh(res.body.refreshToken)).status, 200);
+    });
+
+    await t.step("refresh: rejects access tokens, junk and missing tokens", async () => {
+      const reg = await register("refresh-bad");
+      assertEquals((await refresh(reg.body.accessToken)).status, 401);
+      assertEquals((await refresh("not-a-token")).status, 401);
+      assertEquals((await refresh(undefined)).status, 400);
+    });
+
+    await t.step("refresh: concurrent refreshes with one token → exactly one succeeds", async () => {
+      const reg = await register("refresh-race");
+      const results = await Promise.all([1, 2, 3].map(() => refresh(reg.body.refreshToken)));
+      assertEquals(results.map((r) => r.status).sort(), [200, 401, 401]);
+    });
+
+    await t.step("refresh: fails after logout and after the session expires", async () => {
+      const a = await register("refresh-logout");
+      await api("POST", `${AUTH}/auth/logout`, { body: { refreshToken: a.body.refreshToken } });
+      assertEquals((await refresh(a.body.refreshToken)).status, 401);
+
+      const b = await register("refresh-expired");
+      await query("UPDATE sessions SET expires_at = NOW() - INTERVAL '1 second' WHERE refresh_token = $1", [
+        b.body.refreshToken,
+      ]);
+      assertEquals((await refresh(b.body.refreshToken)).status, 401);
+    });
+
+    await t.step("refresh: picks up role changes and refuses deactivated users", async () => {
+      const reg = await register("refresh-role");
+      await query("UPDATE users SET role = 'seller' WHERE email = $1", [fx.email("refresh-role")]);
+      const res = await refresh(reg.body.refreshToken);
+      assertEquals(roleOf(res.body.accessToken), "seller");
+
+      await query("UPDATE users SET is_active = false WHERE email = $1", [fx.email("refresh-role")]);
+      assertEquals((await refresh(res.body.refreshToken)).status, 401);
+    });
+
     await t.step("renaming a store to a taken name → 409", async () => {
       const seller = await fx.seller("rename");
       const res = await api("PUT", `${USERS}/users/seller`, {

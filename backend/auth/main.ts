@@ -19,6 +19,10 @@ const registerSchema = z.object({
   store_name: z.string().min(2).optional(),
 });
 
+const refreshSchema = z.object({
+  refreshToken: z.string().min(1),
+});
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string(),
@@ -143,6 +147,55 @@ app.post("/auth/logout", async (c) => {
     }
     return c.json({ message: "Logged out successfully" });
   } catch {
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// POST /auth/refresh — exchange a refresh token for a new token pair.
+// Rotation: the old refresh token is consumed, so each one works once.
+// The new access token carries the user's current role from the database.
+app.post("/auth/refresh", async (c) => {
+  try {
+    const { refreshToken } = refreshSchema.parse(await c.req.json());
+    try {
+      await verifyToken(refreshToken, "refresh");
+    } catch {
+      return c.json({ error: "Invalid or expired refresh token" }, 401);
+    }
+
+    const result = await withTransaction(async (tx) => {
+      // Deleting the session claims it: of several concurrent refreshes with
+      // the same token, only one gets a row back.
+      const session = await tx(
+        `DELETE FROM sessions
+         WHERE refresh_token = $1 AND expires_at > NOW()
+         RETURNING user_id`,
+        [refreshToken],
+      );
+      if (session.rows.length === 0) return null;
+      const userId = (session.rows[0] as { user_id: string }).user_id;
+
+      const userResult = await tx(
+        "SELECT id, email, full_name, role FROM users WHERE id = $1 AND is_active = true",
+        [userId],
+      );
+      if (userResult.rows.length === 0) return null;
+      const user = userResult.rows[0] as Record<string, unknown>;
+
+      await tx("DELETE FROM sessions WHERE user_id = $1 AND expires_at <= NOW()", [userId]);
+      const tokens = await createSession(userId, user.role as string, tx);
+      return { user, ...tokens };
+    });
+
+    if (!result) {
+      return c.json({ error: "Invalid or expired refresh token" }, 401);
+    }
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Validation failed", details: err.errors }, 400);
+    }
+    console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
