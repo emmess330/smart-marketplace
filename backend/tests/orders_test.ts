@@ -16,6 +16,34 @@ import {
 } from "./helpers.ts";
 
 const ORDERS = serviceUrl("orders");
+// The tests sign webhook events themselves, as Stripe would.
+const WEBHOOK_SECRET = "whsec_test_suite_only";
+
+async function signedWebhook(event: unknown, secret = WEBHOOK_SECRET) {
+  const payload = JSON.stringify(event);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${timestamp}.${payload}`));
+  const signature = Array.from(new Uint8Array(mac)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const res = await fetch(`${ORDERS}/orders/stripe/webhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Stripe-Signature": `t=${timestamp},v1=${signature}` },
+    body: payload,
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+const succeededEvent = (paymentIntentId: string) => ({
+  id: `evt_test_${crypto.randomUUID()}`,
+  type: "payment_intent.succeeded",
+  data: { object: { id: paymentIntentId, object: "payment_intent", status: "succeeded" } },
+});
 const ADDRESS = {
   full_name: "  Ada Lovelace ",
   line1: "12 Test Street",
@@ -26,7 +54,7 @@ const ADDRESS = {
 
 Deno.test({ name: "orders service", ...suiteOptions }, async (t) => {
   await requireMigrations();
-  const services = await startServices(["orders"]);
+  const services = await startServices(["orders"], { env: { STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET } });
   const fx = new Fixtures();
 
   const stockOf = async (productId: string) =>
@@ -137,6 +165,8 @@ Deno.test({ name: "orders service", ...suiteOptions }, async (t) => {
     });
 
     // ── Stripe test mode ──
+    // Plenty of stock, so the payment steps don't run each other out.
+    const stockedProduct = await fx.product(seller.sellerId, { name: "Stocked", price: 5, stock: 100 });
     const stripeStep = (name: string, fn: () => Promise<void>) =>
       t.step({ name: `stripe: ${name}`, ignore: !hasStripe, fn });
 
@@ -144,8 +174,8 @@ Deno.test({ name: "orders service", ...suiteOptions }, async (t) => {
 
     await stripeStep("paid checkout creates the order with the customer's address", async () => {
       const shopper = await fx.user("shopper");
-      const stockBefore = await stockOf(productId);
-      fulfilledPi = await paidIntent(shopper, productId);
+      const stockBefore = await stockOf(stockedProduct);
+      fulfilledPi = await paidIntent(shopper, stockedProduct);
 
       const res = await checkout(shopper, fulfilledPi);
       assertEquals(res.status, 201, JSON.stringify(res.body));
@@ -157,13 +187,16 @@ Deno.test({ name: "orders service", ...suiteOptions }, async (t) => {
         postal_code: "N1 9GU",
         country: "GB",
       });
-      assertEquals(await stockOf(productId), stockBefore - 1);
+      assertEquals(await stockOf(stockedProduct), stockBefore - 1);
       assertEquals((await api("GET", `${ORDERS}/cart`, { token: shopper.token })).body.item_count, 0);
 
-      // Replaying a fulfilled payment is rejected and must not refund it.
+      // Replaying a fulfilled payment returns the same order: no second
+      // order, no refund.
       const replay = await checkout(shopper, fulfilledPi);
-      assertEquals(replay.status, 409);
-      assert(!replay.body.refunded);
+      assertEquals(replay.status, 200);
+      assertEquals(replay.body.order.id, res.body.order.id);
+      assertEquals(replay.body.already_created, true);
+      assertEquals(await ordersFor(fulfilledPi), 1);
       assertEquals(await amountRefunded(fulfilledPi), 0);
     });
 
@@ -193,16 +226,109 @@ Deno.test({ name: "orders service", ...suiteOptions }, async (t) => {
 
     await stripeStep("concurrent double-submit → one order, no refund", async () => {
       const shopper = await fx.user("double");
-      const pi = await paidIntent(shopper, productId);
+      const pi = await paidIntent(shopper, stockedProduct);
       const results = await Promise.all([checkout(shopper, pi), checkout(shopper, pi)]);
-      assertEquals(results.map((r) => r.status).sort(), [201, 409]);
+      assertEquals(results.map((r) => r.status).sort(), [200, 201]);
       assertEquals(await ordersFor(pi), 1);
       assertEquals(await amountRefunded(pi), 0);
     });
 
-    await stripeStep("paid intent without a shipping address → refunded", async () => {
+    await t.step("webhook: rejects unsigned and wrongly signed requests", async () => {
+      const unsigned = await fetch(`${ORDERS}/orders/stripe/webhook`, { method: "POST", body: "{}" });
+      await unsigned.body?.cancel();
+      assertEquals(unsigned.status, 400);
+      assertEquals((await signedWebhook(succeededEvent("pi_x"), "whsec_wrong")).status, 400);
+      const other = await signedWebhook({ id: "evt_x", type: "customer.created", data: { object: {} } });
+      assertEquals(other.status, 200);
+      assertEquals(other.body.ignored, true);
+    });
+
+    await stripeStep("webhook: creates the order when the browser never calls checkout", async () => {
+      const shopper = await fx.user("tab-closed");
+      const stockBefore = await stockOf(stockedProduct);
+      const pi = await paidIntent(shopper, stockedProduct, 2);
+      // …buyer closes the tab: no checkout call. Stripe's webhook arrives.
+      const hook = await signedWebhook(succeededEvent(pi));
+      assertEquals(hook.status, 200);
+      assertEquals(hook.body.fulfilment, "created");
+      assertEquals(await ordersFor(pi), 1);
+      assertEquals(await stockOf(stockedProduct), stockBefore - 2);
+      assertEquals((await api("GET", `${ORDERS}/cart`, { token: shopper.token })).body.item_count, 0);
+      const orders = await api("GET", `${ORDERS}/orders`, { token: shopper.token });
+      assertEquals(orders.body.orders[0].shipping_address.full_name, "Ada Lovelace");
+
+      // If the browser does call checkout late, it gets the same order.
+      const late = await checkout(shopper, pi);
+      assertEquals(late.status, 200);
+      assertEquals(late.body.order.id, orders.body.orders[0].id);
+      // Stripe redelivering the event changes nothing.
+      assertEquals((await signedWebhook(succeededEvent(pi))).body.fulfilment, "existing");
+      assertEquals(await ordersFor(pi), 1);
+      assertEquals(await amountRefunded(pi), 0);
+    });
+
+    await stripeStep("webhook: after the browser's checkout, does nothing", async () => {
+      const shopper = await fx.user("browser-first");
+      const pi = await paidIntent(shopper, stockedProduct);
+      assertEquals((await checkout(shopper, pi)).status, 201);
+      assertEquals((await signedWebhook(succeededEvent(pi))).body.fulfilment, "existing");
+      assertEquals(await ordersFor(pi), 1);
+    });
+
+    await stripeStep("webhook and checkout at the same moment → one order, no refund", async () => {
+      const shopper = await fx.user("race");
+      const pi = await paidIntent(shopper, stockedProduct);
+      const [hook, browser] = await Promise.all([signedWebhook(succeededEvent(pi)), checkout(shopper, pi)]);
+      assertEquals(hook.status, 200);
+      assert([200, 201].includes(browser.status), `checkout status ${browser.status}`);
+      assertEquals(await ordersFor(pi), 1);
+      assertEquals(await amountRefunded(pi), 0);
+    });
+
+    await stripeStep("order matches what was paid, even if the cart changed afterwards", async () => {
+      const shopper = await fx.user("cart-changed");
+      const extra = await fx.product(seller.sellerId, { name: "Extra", price: 7, stock: 5 });
+      const pi = await paidIntent(shopper, stockedProduct);
+      // Added after paying (e.g. in another tab): not part of this order.
+      await api("POST", `${ORDERS}/cart`, { token: shopper.token, body: { product_id: extra, quantity: 1 } });
+
+      const res = await checkout(shopper, pi);
+      assertEquals(res.status, 201);
+      assertEquals(Number(res.body.order.total_amount), 5);
+      assertEquals(res.body.items.map((i: { product_id: string }) => i.product_id), [stockedProduct]);
+      const cart = await api("GET", `${ORDERS}/cart`, { token: shopper.token });
+      assertEquals(cart.body.items.map((i: { product_id: string }) => i.product_id), [extra]);
+    });
+
+    await stripeStep("webhook: stock gone after payment → refunded, no order", async () => {
+      const shopper = await fx.user("webhook-unlucky");
+      const scarce = await fx.product(seller.sellerId, { name: "Last one", price: 5, stock: 1 });
+      const pi = await paidIntent(shopper, scarce);
+      await query("UPDATE products SET stock_quantity = 0 WHERE id = $1", [scarce]);
+      const hook = await signedWebhook(succeededEvent(pi));
+      assertEquals(hook.body.fulfilment, "refunded");
+      assertEquals(await ordersFor(pi), 0);
+      assertEquals(await amountRefunded(pi), 500);
+    });
+
+    await stripeStep("webhook: leaves payments this app didn't start alone", async () => {
+      const outsider = await stripe("/payment_intents", {
+        amount: "500",
+        currency: "gbp",
+        payment_method: "pm_card_visa",
+        confirm: "true",
+        "automatic_payment_methods[enabled]": "true",
+        "automatic_payment_methods[allow_redirects]": "never",
+      });
+      const hook = await signedWebhook(succeededEvent(outsider.id));
+      assertEquals(hook.status, 200);
+      assertEquals(hook.body.fulfilment, "not_ours");
+      assertEquals(await amountRefunded(outsider.id), 0);
+    });
+
+    await stripeStep("buyer submits a payment this app never started a checkout for → refunded", async () => {
       const shopper = await fx.user("no-address");
-      await api("POST", `${ORDERS}/cart`, { token: shopper.token, body: { product_id: productId, quantity: 1 } });
+      await api("POST", `${ORDERS}/cart`, { token: shopper.token, body: { product_id: stockedProduct, quantity: 1 } });
       const bare = await stripe("/payment_intents", {
         amount: "500",
         currency: "gbp",

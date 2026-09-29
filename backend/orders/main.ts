@@ -1,6 +1,6 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
-import { query, type TxQuery, withTransaction } from "../shared/db.ts";
+import { isUniqueViolation, query, withTransaction } from "../shared/db.ts";
 import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { parseJsonBody, uuidParams } from "../shared/validation.ts";
 import { corsConfig } from "../shared/cors.ts";
@@ -193,6 +193,17 @@ async function refundPaymentIntent(paymentIntentId: string) {
   return data as { id: string; status: string };
 }
 
+// Cancels an unpaid payment intent so it can no longer be paid.
+async function cancelPaymentIntent(paymentIntentId: string) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) return;
+  const response = await fetch(
+    `https://api.stripe.com/v1/payment_intents/${encodeURIComponent(paymentIntentId)}/cancel`,
+    { method: "POST", headers: { "Authorization": `Bearer ${stripeSecretKey}` } },
+  );
+  await response.body?.cancel();
+}
+
 async function updateOrderStatusFromPaymentIntent(
   paymentIntent: StripePaymentIntent,
 ) {
@@ -228,63 +239,186 @@ const shippingAddressSchema = z.object({
   country: z.string().trim().length(2).toUpperCase(), // ISO 3166-1 alpha-2
   postal_code: z.string().trim().min(2).max(20),
 });
-type ShippingAddress = z.infer<typeof shippingAddressSchema>;
 
 const createPaymentIntentSchema = z.object({
   shipping_address: shippingAddressSchema,
 });
 
-// The shipping address is not accepted here: it was validated when the
-// payment intent was created and is read back from the intent's metadata,
-// so it can't be rejected (or changed) after the customer has paid.
+// Only the payment id is sent: what was bought, its price and the shipping
+// address come from the snapshot saved when the payment intent was created,
+// so none of it can be changed (or rejected) after the customer has paid.
 const checkoutSchema = z.object({
   stripe_payment_id: z.string(),
 });
 
-// Stored as one metadata key per field (Stripe caps each value at 500 chars).
+// The shipping address is also copied into the intent's metadata, one key
+// per field, so it's visible in the Stripe dashboard.
 const SHIPPING_METADATA_PREFIX = "ship_";
-
-function shippingAddressFromMetadata(metadata: Record<string, string> = {}) {
-  const fields = Object.fromEntries(
-    Object.entries(metadata)
-      .filter(([key]) => key.startsWith(SHIPPING_METADATA_PREFIX))
-      .map(([key, value]) => [key.slice(SHIPPING_METADATA_PREFIX.length), value]),
-  );
-  return shippingAddressSchema.safeParse(fields);
-}
 
 type CartCheckoutItem = Record<string, unknown>;
 
-// With `lockProducts`, the product rows are locked (FOR UPDATE) until the
-// surrounding transaction ends, so concurrent checkouts can't both pass the
-// stock check. Ordering by product id keeps lock acquisition deadlock-free.
-async function getCheckoutCartItems(
-  userId: string,
-  run: TxQuery = query,
-  lockProducts = false,
-) {
-  const cartResult = await run(
+async function getCheckoutCartItems(userId: string) {
+  const cartResult = await query(
     `SELECT ci.quantity, p.id as product_id, p.price, p.stock_quantity, p.name
      FROM cart_items ci
      JOIN products p ON ci.product_id = p.id
      WHERE ci.user_id = $1 AND p.is_active = true
-     ORDER BY p.id${lockProducts ? " FOR UPDATE OF p" : ""}`,
+     ORDER BY p.id`,
     [userId],
   );
 
   return cartResult.rows as CartCheckoutItem[];
 }
 
-// Thrown inside the checkout transaction to roll back and return a 4xx.
-// `refundable` marks failures where the customer has paid but no order can
-// be created, so the payment must be returned.
+// A payment intent's snapshot row (pending_checkouts), see migration 005.
+type SnapshotItem = { product_id: string; name: string; quantity: number; price: number };
+type CheckoutSnapshot = {
+  user_id: string;
+  items: SnapshotItem[];
+  total_amount: string;
+  shipping_address: Record<string, unknown>;
+};
+
+// Thrown inside the fulfilment transaction when a paid order can't be
+// created; it rolls back and the payment is refunded.
 class CheckoutError extends Error {
-  constructor(
-    message: string,
-    readonly status: 400 | 409,
-    readonly refundable = false,
-  ) {
+  constructor(message: string, readonly status: 400 | 409) {
     super(message);
+  }
+}
+
+type FulfilmentResult =
+  | { kind: "created"; order: Record<string, unknown>; items: SnapshotItem[] }
+  | { kind: "existing"; order: Record<string, unknown> }
+  | { kind: "not_ours" }
+  | { kind: "refunded"; reason: string; status: 400 | 409; refundStatus: string }
+  | { kind: "refund_failed"; reason: string };
+
+// Creates the order a succeeded payment intent paid for, from its snapshot.
+// Both the browser's checkout request and Stripe's webhook call this; the
+// first creates the order and later calls get that same order back. If the
+// order can't be fulfilled (stock gone, product withdrawn) the payment is
+// refunded. The caller must check the intent succeeded and wasn't refunded.
+//
+// With `refundUnknown: false` (the webhook), an intent with no snapshot is
+// left alone rather than refunded: Stripe sends events for every payment on
+// the account, and ones this app didn't start aren't ours to refund.
+async function fulfilPaymentIntent(
+  paymentIntent: StripePaymentIntent,
+  { refundUnknown }: { refundUnknown: boolean },
+): Promise<FulfilmentResult> {
+  const existingOrder = async () =>
+    (await query("SELECT * FROM orders WHERE stripe_payment_id = $1", [paymentIntent.id]))
+      .rows[0] as Record<string, unknown> | undefined;
+
+  try {
+    return await withTransaction<FulfilmentResult>(async (tx) => {
+      // Serialise fulfilment per payment, so whichever caller loses a race
+      // sees the winner's order below instead of creating or refunding one.
+      await tx("SELECT pg_advisory_xact_lock(hashtext($1))", [paymentIntent.id]);
+
+      const existing = await tx("SELECT * FROM orders WHERE stripe_payment_id = $1", [paymentIntent.id]);
+      if (existing.rows.length > 0) {
+        return { kind: "existing", order: existing.rows[0] as Record<string, unknown> };
+      }
+
+      const snapshotResult = await tx(
+        `SELECT user_id, items, total_amount, shipping_address
+         FROM pending_checkouts WHERE stripe_payment_id = $1`,
+        [paymentIntent.id],
+      );
+      if (snapshotResult.rows.length === 0) {
+        if (!refundUnknown) return { kind: "not_ours" };
+        throw new CheckoutError("No checkout was started for this payment", 400);
+      }
+      const snapshot = snapshotResult.rows[0] as CheckoutSnapshot;
+
+      if (String(snapshot.user_id) !== paymentIntent.metadata?.user_id) {
+        throw new CheckoutError("Payment does not match its checkout", 400);
+      }
+      if (
+        Math.round(Number(snapshot.total_amount) * 100) !== paymentIntent.amount ||
+        paymentIntent.currency?.toLowerCase() !== "gbp"
+      ) {
+        throw new CheckoutError("Payment amount does not match its checkout", 409);
+      }
+
+      // Lock the products (in id order, so concurrent fulfilments can't
+      // deadlock) and re-check they're still for sale and in stock.
+      const productIds = snapshot.items.map((item) => item.product_id);
+      const productsResult = await tx(
+        `SELECT id, name, stock_quantity, is_active FROM products
+         WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+        [productIds],
+      );
+      const products = new Map(
+        (productsResult.rows as { id: string; name: string; stock_quantity: number; is_active: boolean }[])
+          .map((row) => [String(row.id), row]),
+      );
+      for (const item of snapshot.items) {
+        const product = products.get(item.product_id);
+        if (!product?.is_active) {
+          throw new CheckoutError(`${item.name} is no longer available`, 409);
+        }
+        if (Number(product.stock_quantity) < item.quantity) {
+          throw new CheckoutError(`Insufficient stock for ${product.name}`, 409);
+        }
+      }
+
+      const orderResult = await tx(
+        `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [
+          snapshot.user_id,
+          snapshot.total_amount,
+          JSON.stringify(snapshot.shipping_address),
+          paymentIntent.id,
+          paymentIntentStatusToOrderStatus("succeeded"),
+        ],
+      );
+      const order = orderResult.rows[0] as Record<string, unknown>;
+
+      for (const item of snapshot.items) {
+        await tx(
+          `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
+           VALUES ($1, $2, $3, $4)`,
+          [order.id, item.product_id, item.quantity, item.price],
+        );
+        await tx(
+          "UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2",
+          [item.quantity, item.product_id],
+        );
+      }
+
+      // Remove what was bought from the cart; anything added since stays.
+      await tx(
+        "DELETE FROM cart_items WHERE user_id = $1 AND product_id = ANY($2::uuid[])",
+        [snapshot.user_id, productIds],
+      );
+      await tx("DELETE FROM pending_checkouts WHERE stripe_payment_id = $1", [paymentIntent.id]);
+
+      return { kind: "created", order, items: snapshot.items };
+    });
+  } catch (err) {
+    // The unique constraint on orders.stripe_payment_id backs up the lock.
+    if (isUniqueViolation(err, "orders_stripe_payment_id_unique")) {
+      const order = await existingOrder();
+      if (order) return { kind: "existing", order };
+    }
+    if (!(err instanceof CheckoutError)) throw err;
+    try {
+      const refund = await refundPaymentIntent(paymentIntent.id);
+      return { kind: "refunded", reason: err.message, status: err.status, refundStatus: refund.status };
+    } catch (refundErr) {
+      // Money taken, no order, refund failed: needs manual follow-up.
+      console.error(
+        `REFUND FAILED for payment intent ${paymentIntent.id} ` +
+          `(user ${paymentIntent.metadata?.user_id}, reason: ${err.message}):`,
+        refundErr,
+      );
+      return { kind: "refund_failed", reason: err.message };
+    }
   }
 }
 
@@ -296,26 +430,35 @@ function calculateCartTotal(cartItems: CartCheckoutItem[]) {
   return Math.round(total * 100) / 100;
 }
 
-// POST /orders/stripe/webhook — Stripe webhook for payment status changes
+// POST /orders/stripe/webhook — Stripe webhook for payment status changes.
+// On payment_intent.succeeded it creates the order if the browser didn't
+// (tab closed, redirect-based payment method). Replies 4xx only for requests
+// that aren't valid Stripe events; processing errors reply 500 so Stripe
+// retries the delivery.
 app.post("/orders/stripe/webhook", async (c) => {
+  const endpointSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
+  if (!endpointSecret || endpointSecret.includes("your_key")) {
+    console.error("STRIPE_WEBHOOK_SECRET not set or placeholder");
+    return c.json({ error: "Stripe webhook not configured" }, 500);
+  }
+
+  const signature = c.req.header("stripe-signature");
+  if (!signature) {
+    return c.json({ error: "Missing Stripe-Signature header" }, 400);
+  }
+
+  let event: StripeWebhookEvent;
   try {
-    const endpointSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
-    if (!endpointSecret || endpointSecret.includes("your_key")) {
-      console.error("STRIPE_WEBHOOK_SECRET not set or placeholder");
-      return c.json({ error: "Stripe webhook not configured" }, 500);
-    }
-
-    const signature = c.req.header("stripe-signature");
-    if (!signature) {
-      return c.json({ error: "Missing Stripe-Signature header" }, 400);
-    }
-
     const payload = await c.req.text();
     await verifyStripeWebhookSignature(payload, signature, endpointSecret);
+    event = JSON.parse(payload) as StripeWebhookEvent;
+  } catch (err) {
+    console.error("Rejected Stripe webhook:", err);
+    return c.json({ error: "Invalid Stripe webhook" }, 400);
+  }
 
-    const event = JSON.parse(payload) as StripeWebhookEvent;
+  try {
     const stripeObject = event.data?.object as StripePaymentIntent | undefined;
-
     if (
       !event.type.startsWith("payment_intent.") ||
       stripeObject?.object !== "payment_intent" ||
@@ -324,17 +467,27 @@ app.post("/orders/stripe/webhook", async (c) => {
       return c.json({ received: true, ignored: true });
     }
 
-    const { orderStatus, updatedOrders } =
-      await updateOrderStatusFromPaymentIntent(
-        stripeObject,
-      );
+    if (event.type === "payment_intent.succeeded") {
+      // Re-read the intent: events can arrive late or out of order, and
+      // refunds only show on the expanded latest_charge.
+      const paymentIntent = await fetchPaymentIntent(stripeObject.id);
+      if (paymentIntent.status !== "succeeded" || amountRefunded(paymentIntent) > 0) {
+        return c.json({ received: true, ignored: true, payment_status: paymentIntent.status });
+      }
 
-    if (updatedOrders.length === 0) {
-      console.warn(
-        `No order found for Stripe payment intent ${stripeObject.id}`,
-      );
+      const result = await fulfilPaymentIntent(paymentIntent, { refundUnknown: false });
+      if (result.kind === "created") {
+        console.log(`Webhook created order ${result.order.id} for ${paymentIntent.id}`);
+      } else if (result.kind === "refunded") {
+        console.warn(`Webhook refunded ${paymentIntent.id}: ${result.reason}`);
+      } else if (result.kind === "refund_failed") {
+        // Let Stripe redeliver, which retries the (idempotent) refund.
+        return c.json({ error: "Refund failed" }, 500);
+      }
+      return c.json({ received: true, payment_intent: paymentIntent.id, fulfilment: result.kind });
     }
 
+    const { orderStatus, updatedOrders } = await updateOrderStatusFromPaymentIntent(stripeObject);
     return c.json({
       received: true,
       payment_intent: stripeObject.id,
@@ -343,8 +496,8 @@ app.post("/orders/stripe/webhook", async (c) => {
       updated_orders: updatedOrders.length,
     });
   } catch (err) {
-    console.error("Stripe webhook error:", err);
-    return c.json({ error: "Invalid Stripe webhook" }, 400);
+    console.error("Stripe webhook processing failed:", err);
+    return c.json({ error: "Webhook processing failed" }, 500);
   }
 });
 
@@ -517,9 +670,8 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
     const userId = c.get("userId");
     const data = await parseJsonBody(c, checkoutSchema);
 
-    // Verify the payment itself first. Cart and stock checks happen inside
-    // the transaction below, where a mismatch triggers a refund — checking
-    // them here would reject a paid checkout without returning the money.
+    // Verify the payment itself; stock checks happen during fulfilment, where
+    // a problem triggers a refund rather than leaving the customer charged.
     const paymentIntent = await fetchPaymentIntent(data.stripe_payment_id);
 
     if (paymentIntent.metadata?.user_id !== String(userId)) {
@@ -547,133 +699,29 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       return c.json({ error: "This payment has been refunded" }, 409);
     }
 
-    const orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
-
-    // Everything below runs in one transaction: either the order, its items,
-    // the stock decrements and the cart clear all happen, or none do.
-    let result: { order: Record<string, unknown>; items: CartCheckoutItem[] };
-    try {
-      result = await withTransaction(async (tx) => {
-        // Serialise checkouts for the same payment, so a request that loses a
-        // race sees the winner's order below instead of refunding it.
-        await tx("SELECT pg_advisory_xact_lock(hashtext($1))", [
-          data.stripe_payment_id,
-        ]);
-
-        const alreadyUsed = await tx(
-          "SELECT id FROM orders WHERE stripe_payment_id = $1",
-          [data.stripe_payment_id],
-        );
-        if (alreadyUsed.rows.length > 0) {
-          throw new CheckoutError(
-            "This payment has already been applied to an order",
-            409,
-          );
-        }
-
-        const shipping = shippingAddressFromMetadata(paymentIntent.metadata);
-        if (!shipping.success) {
-          throw new CheckoutError(
-            "Payment has no valid shipping address",
-            400,
-            true,
-          );
-        }
-        const shippingAddress: ShippingAddress = shipping.data;
-
-        // Re-read the cart with product rows locked. The cart or stock may have
-        // changed since the payment intent was created.
-        const lockedItems = await getCheckoutCartItems(userId, tx, true);
-        if (lockedItems.length === 0) {
-          throw new CheckoutError("Cart is empty", 409, true);
-        }
-        for (const item of lockedItems) {
-          if (Number(item.stock_quantity) < Number(item.quantity)) {
-            throw new CheckoutError(
-              `Insufficient stock for ${item.name}`,
-              409,
-              true,
-            );
-          }
-        }
-        const lockedTotal = calculateCartTotal(lockedItems);
-        if (Math.round(lockedTotal * 100) !== paymentIntent.amount) {
-          throw new CheckoutError(
-            "Cart changed during checkout and no longer matches the payment",
-            409,
-            true,
-          );
-        }
-
-        const orderResult = await tx(
-          `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`,
-          [
-            userId,
-            lockedTotal,
-            JSON.stringify(shippingAddress),
-            data.stripe_payment_id,
-            orderStatus,
-          ],
-        );
-        const order = orderResult.rows[0] as Record<string, unknown>;
-
-        for (const item of lockedItems) {
-          await tx(
-            `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
-             VALUES ($1, $2, $3, $4)`,
-            [order.id, item.product_id, item.quantity, item.price],
-          );
-
-          await tx(
-            `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
-            [item.quantity, item.product_id],
-          );
-        }
-
-        await tx("DELETE FROM cart_items WHERE user_id = $1", [userId]);
-
-        return { order, items: lockedItems };
-      });
-    } catch (err) {
-      if (err instanceof CheckoutError) {
-        if (!err.refundable) {
-          return c.json({ error: err.message }, err.status);
-        }
-        try {
-          const refund = await refundPaymentIntent(data.stripe_payment_id);
-          return c.json({
-            error: err.message,
-            refunded: true,
-            refund_status: refund.status,
-          }, err.status);
-        } catch (refundErr) {
-          // Money taken, no order, refund failed: needs manual follow-up.
-          console.error(
-            `REFUND FAILED for payment intent ${data.stripe_payment_id} ` +
-              `(user ${userId}, reason: ${err.message}):`,
-            refundErr,
-          );
-          return c.json({
-            error: `${err.message}. Your payment could not be refunded ` +
-              "automatically; please contact support.",
-            refunded: false,
-          }, 502);
-        }
-      }
-      // Unique constraint on stripe_payment_id is the authoritative guard
-      // backstop behind the advisory lock + lookup in the transaction.
-      if (err instanceof Error && /unique|duplicate/i.test(err.message)) {
-        return c.json(
-          { error: "This payment has already been applied to an order" },
-          409,
-        );
-      }
-      throw err;
+    const result = await fulfilPaymentIntent(paymentIntent, { refundUnknown: true });
+    switch (result.kind) {
+      case "created":
+        return c.json({ order: result.order, items: result.items }, 201);
+      case "existing":
+        // Already created, e.g. by the webhook, or this is a retried request.
+        return c.json({ order: result.order, already_created: true }, 200);
+      case "refunded":
+        return c.json({
+          error: result.reason,
+          refunded: true,
+          refund_status: result.refundStatus,
+        }, result.status);
+      case "refund_failed":
+        return c.json({
+          error: `${result.reason}. Your payment could not be refunded ` +
+            "automatically; please contact support.",
+          refunded: false,
+        }, 502);
+      case "not_ours":
+        // Unreachable: refundUnknown is set.
+        return c.json({ error: "No checkout was started for this payment" }, 400);
     }
-
-    return c.json(result, 201);
   } catch (err) {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
@@ -923,6 +971,32 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
     if (!response.ok) {
       console.error("Stripe error:", data);
       return c.json({ error: data.error?.message || "Payment failed" }, 400);
+    }
+
+    // Snapshot what this payment is for; the order is created from it.
+    try {
+      await query(
+        `INSERT INTO pending_checkouts
+           (stripe_payment_id, user_id, items, total_amount, shipping_address)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          data.id,
+          userId,
+          JSON.stringify(cartItems.map((item) => ({
+            product_id: String(item.product_id),
+            name: String(item.name),
+            quantity: Number(item.quantity),
+            price: Number(item.price),
+          }))),
+          totalAmount,
+          JSON.stringify(shipping_address),
+        ],
+      );
+    } catch (err) {
+      // Without a snapshot the payment couldn't be fulfilled, so make sure it
+      // can't be paid.
+      await cancelPaymentIntent(data.id).catch(() => {});
+      throw err;
     }
 
     return c.json({

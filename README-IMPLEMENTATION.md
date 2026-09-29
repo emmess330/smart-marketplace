@@ -39,6 +39,14 @@ cp .env.example backend/.env
 
 Edit `backend/.env`: set `JWT_SECRET` to a long random string, and add **Stripe test** keys from the [Stripe dashboard](https://dashboard.stripe.com/test/apikeys) if you use checkout.
 
+**Stripe webhooks (recommended for checkout).** Orders are created by whichever arrives first: the browser's `POST /orders/checkout` after payment, or Stripe's `payment_intent.succeeded` webhook. Without the webhook, a buyer who closes the tab after paying, or pays with a redirect-based method (Klarna, Revolut Pay, Amazon Pay), gets no order. Locally, forward webhooks with the [Stripe CLI](https://docs.stripe.com/stripe-cli):
+
+```bash
+stripe listen --forward-to localhost:8003/orders/stripe/webhook
+```
+
+It prints a signing secret (`whsec_…`); put it in `backend/.env` as `STRIPE_WEBHOOK_SECRET` and restart the orders service. In production, add an endpoint in the Stripe dashboard (Developers → Webhooks) for `payment_intent.succeeded`, `payment_intent.processing`, `payment_intent.payment_failed` and `payment_intent.canceled`, pointing at `/orders/stripe/webhook`.
+
 The repo root `.env.example` documents variables; the Deno services load **`backend/.env`** when you pass `--env-file=.env` (see commands below).
 
 ## 2. Database (PostgreSQL)
@@ -124,6 +132,7 @@ docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database
 docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/002_seed.sql
 docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/003_orders_payment_unique.sql
 docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/004_sellers_user_unique.sql
+docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/005_pending_checkouts.sql
 ```
 
 Or with local `psql` (stop on first error for every file except the seed):
@@ -133,6 +142,7 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/001_init.sql
 psql "$DB_URL" -f database/migrations/002_seed.sql
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/003_orders_payment_unique.sql
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/004_sellers_user_unique.sql
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/005_pending_checkouts.sql
 ```
 
 Without `001_init.sql`, ML scripts and the app will fail with errors like `relation "order_items" does not exist`.
