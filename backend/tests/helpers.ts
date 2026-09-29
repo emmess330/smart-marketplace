@@ -41,8 +41,9 @@ export const TEST_ES_INDEX = `products_test_${crypto.randomUUID().slice(0, 8)}`;
 
 // ── Optional dependencies: tests needing them are skipped when absent ──
 
-export const hasStripe = (Deno.env.get("STRIPE_SECRET_KEY") ?? "")
-  .startsWith("sk_test_");
+// A real test-mode key — not live, and not the .env.example placeholder.
+const stripeKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+export const hasStripe = stripeKey.startsWith("sk_test_") && !stripeKey.includes("your_key");
 
 export const hasMl = (() => {
   try {

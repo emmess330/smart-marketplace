@@ -59,7 +59,7 @@ deno task dev:users
 ```
 Or all at once: `./backend/start-all.sh` (macOS: opens Terminal windows per service; Linux: backgrounds them, logs to `/tmp`).
 
-Tests: `deno task test` (from `backend/`) runs the integration suite in `backend/tests/`. It spawns the services it needs on test ports 18001–18007 (via the `SERVICE_PORT` env var every service honours — not `PORT`, which `.env.example` sets for the legacy entry point) and uses a throwaway Elasticsearch index (`ES_INDEX`), so dev servers can stay up. Fixtures are tagged per run and deleted afterwards — follow the `Fixtures` helper in `tests/helpers.ts` rather than touching existing rows. Stripe/ML/Elasticsearch steps skip when those aren't available. No linter is configured for the backend.
+Tests: `deno task test` (from `backend/`) runs the integration suite in `backend/tests/`. It spawns the services it needs on test ports 18001–18007 (via the `SERVICE_PORT` env var every service honours — not `PORT`, which `.env.example` sets for the legacy entry point) and uses a throwaway Elasticsearch index (`ES_INDEX`), so dev servers can stay up. Fixtures are tagged per run and deleted afterwards — follow the `Fixtures` helper in `tests/helpers.ts` rather than touching existing rows. Stripe/ML/Elasticsearch steps skip when those aren't available. CI (`.github/workflows/ci.yml`) runs `deno check` on every service plus this suite against fresh Postgres + Elasticsearch containers; Stripe steps run there only if the `STRIPE_TEST_SECRET_KEY` repo secret is set. No linter is configured for the backend.
 
 ### Frontend
 Run from `frontend/`:
@@ -67,7 +67,7 @@ Run from `frontend/`:
 npm install
 npm run dev      # next dev --webpack --hostname 0.0.0.0
 npm run build     # next build --webpack
-npm run lint       # next lint
+npm run lint       # eslint . (`next lint` was removed in Next 16)
 ```
 No test suite is configured. Note `frontend/AGENTS.md` / `frontend/CLAUDE.md` warn that this is a bleeding-edge Next.js version (16.2.3 + React 19.2) whose APIs may diverge from training data — check `node_modules/next/dist/docs/` before relying on prior Next.js knowledge for anything nonstandard.
 

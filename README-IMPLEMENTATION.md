@@ -304,6 +304,15 @@ Requirements: Postgres running with migrations applied (including `004`), and `b
 
 The recommender retrain test restores your `model.pkl` afterwards. Service output from the last run is in `backend/tests/.logs/`. Run a single file with `deno task test tests/orders_test.ts`.
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
+
+- **Backend + ML tests**: starts Postgres 16 and Elasticsearch 8.13 as service containers, applies all migrations to an empty database, type-checks every Deno service, installs the ML dependencies into `ml/.venv`, then runs `deno task test`. If a run fails, the service logs are uploaded as a build artifact.
+- **Frontend**: `npm run lint`, `tsc --noEmit` and `npm run build`.
+
+The Stripe checkout and refund tests run in CI only if you add a repository secret named `STRIPE_TEST_SECRET_KEY` holding a Stripe **test-mode** secret key (`sk_test_…`; GitHub → Settings → Secrets and variables → Actions). Without it they're skipped. Secrets are never exposed to pull requests from forks.
+
 ## 10. Production notes
 
 - Restrict **CORS** in `backend/shared/cors.ts` (currently permissive for development).
