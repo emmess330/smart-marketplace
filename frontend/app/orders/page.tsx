@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ordersApi } from "@/lib/api";
 import Cookies from "js-cookie";
+import PaymentReturnNotice from "./PaymentReturnNotice";
 
 interface OrderItem {
   name: string;
@@ -15,6 +16,7 @@ interface Order {
   status: string;
   total_amount: number;
   created_at: string;
+  stripe_payment_id?: string | null;
   items: OrderItem[];
 }
 
@@ -23,28 +25,32 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const loadOrders = useCallback(() =>
+    ordersApi.getOrders()
+      .then(res => setOrders(res.data.orders))
+      .catch(() => {}), []);
+
   useEffect(() => {
     if (!Cookies.get("access_token")) {
       router.push("/login");
       return;
     }
-    ordersApi.getOrders()
-      .then(res => setOrders(res.data.orders))
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return (
-    <div className="max-w-3xl mx-auto px-4 py-8 text-gray-500">Loading orders...</div>
-  );
-
-  if (orders.length === 0) return (
-    <div className="max-w-3xl mx-auto px-4 py-16 text-center text-gray-500">
-      No orders yet.
-    </div>
-  );
+    loadOrders().finally(() => setLoading(false));
+  }, [loadOrders, router]);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
+      {/* Reads Stripe's return parameters (useSearchParams), so it needs a Suspense boundary. */}
+      <Suspense fallback={null}>
+        <PaymentReturnNotice orders={orders} reload={loadOrders} />
+      </Suspense>
+
+      {loading ? (
+        <p className="text-gray-500">Loading orders...</p>
+      ) : orders.length === 0 ? (
+        <p className="py-8 text-center text-gray-500">No orders yet.</p>
+      ) : (
+      <>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Your orders</h1>
 
       <div className="space-y-4">
@@ -68,7 +74,7 @@ export default function OrdersPage() {
                   {order.status}
                 </span>
                 <p className="text-lg font-bold text-gray-900 mt-1">
-                  ${Number(order.total_amount).toFixed(2)}
+                  £{Number(order.total_amount).toFixed(2)}
                 </p>
               </div>
             </div>
@@ -77,13 +83,15 @@ export default function OrdersPage() {
               {order.items?.map((item, i) => (
                 <div key={i} className="flex justify-between text-sm text-gray-600">
                   <span>{item.name} × {item.quantity}</span>
-                  <span>${(Number(item.price) * item.quantity).toFixed(2)}</span>
+                  <span>£{(Number(item.price) * item.quantity).toFixed(2)}</span>
                 </div>
               ))}
             </div>
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }
