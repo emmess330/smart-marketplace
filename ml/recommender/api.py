@@ -1,14 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 import pickle
 import numpy as np
 import pandas as pd
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from db_config import get_db_url
+from auth import TokenPayload, require_admin_key, require_auth
 
 app = FastAPI(title="Recommendation Service")
 
@@ -213,8 +215,13 @@ def health():
         "method": model_data.get("method") if model_data else "popular",
     }
 
-@app.post("/recommend/retrain")
+# One retrain at a time: concurrent runs would race on writing model.pkl.
+_retrain_lock = threading.Lock()
+
+@app.post("/recommend/retrain", dependencies=[Depends(require_admin_key)])
 def retrain():
+    if not _retrain_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Retrain already in progress")
     try:
         from train import train_and_save
         train_and_save()
@@ -222,9 +229,18 @@ def retrain():
         return {"message": "Model retrained successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        _retrain_lock.release()
 
 @app.get("/recommend/user/{user_id}")
-def recommend_for_user(user_id: str, n: int = 8):
+def recommend_for_user(
+    user_id: str, n: int = 8, payload: TokenPayload = Depends(require_auth)
+):
+    # Recommendations are derived from purchase history, so they're private.
+    if user_id != payload.sub:
+        raise HTTPException(
+            status_code=403, detail="Cannot view another user's recommendations"
+        )
     if model_data is None:
         return {
             "user_id": user_id,

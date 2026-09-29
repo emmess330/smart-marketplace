@@ -1,6 +1,6 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
-import { query } from "../shared/db.ts";
+import { query, type TxQuery, withTransaction } from "../shared/db.ts";
 import { authMiddleware } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
@@ -19,6 +19,7 @@ type StripePaymentIntent = {
   currency?: string;
   status: string;
   metadata?: Record<string, string>;
+  latest_charge?: { amount_refunded?: number } | string | null;
 };
 
 type StripeWebhookEvent = {
@@ -136,10 +137,12 @@ async function fetchPaymentIntent(paymentIntentId: string) {
     throw new Error("STRIPE_SECRET_KEY not set or placeholder");
   }
 
+  // Expand latest_charge so callers can see refunds: a refunded payment
+  // intent keeps status "succeeded".
   const response = await fetch(
     `https://api.stripe.com/v1/payment_intents/${
       encodeURIComponent(paymentIntentId)
-    }`,
+    }?expand[]=latest_charge`,
     {
       headers: {
         "Authorization": `Bearer ${stripeSecretKey}`,
@@ -155,6 +158,43 @@ async function fetchPaymentIntent(paymentIntentId: string) {
   }
 
   return data as StripePaymentIntent;
+}
+
+function amountRefunded(paymentIntent: StripePaymentIntent) {
+  const charge = paymentIntent.latest_charge;
+  return charge && typeof charge === "object"
+    ? Number(charge.amount_refunded || 0)
+    : 0;
+}
+
+// Fully refunds a payment intent. The idempotency key makes retries (and
+// concurrent failed checkouts for the same payment) refund at most once.
+async function refundPaymentIntent(paymentIntentId: string) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
+    throw new Error("STRIPE_SECRET_KEY not set or placeholder");
+  }
+
+  const params = new URLSearchParams();
+  params.append("payment_intent", paymentIntentId);
+  params.append("metadata[reason]", "checkout_failed");
+
+  const response = await fetch("https://api.stripe.com/v1/refunds", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${stripeSecretKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Idempotency-Key": `checkout-refund-${paymentIntentId}`,
+    },
+    body: params,
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Unable to refund payment intent");
+  }
+
+  return data as { id: string; status: string };
 }
 
 async function updateOrderStatusFromPaymentIntent(
@@ -180,30 +220,72 @@ const addToCartSchema = z.object({
   quantity: z.number().int().positive(),
 });
 
+const shippingAddressSchema = z.object({
+  full_name: z.string().trim().min(2).max(255),
+  line1: z.string().trim().min(1).max(255),
+  line2: z.string().trim().max(255).optional(),
+  city: z.string().trim().min(1).max(100),
+  country: z.string().trim().length(2).toUpperCase(), // ISO 3166-1 alpha-2
+  postal_code: z.string().trim().min(2).max(20),
+});
+type ShippingAddress = z.infer<typeof shippingAddressSchema>;
+
+const createPaymentIntentSchema = z.object({
+  shipping_address: shippingAddressSchema,
+});
+
+// The shipping address is not accepted here: it was validated when the
+// payment intent was created and is read back from the intent's metadata,
+// so it can't be rejected (or changed) after the customer has paid.
 const checkoutSchema = z.object({
-  shipping_address: z.object({
-    full_name: z.string(),
-    line1: z.string(),
-    line2: z.string().optional(),
-    city: z.string(),
-    country: z.string(),
-    postal_code: z.string(),
-  }),
   stripe_payment_id: z.string(),
 });
 
+// Stored as one metadata key per field (Stripe caps each value at 500 chars).
+const SHIPPING_METADATA_PREFIX = "ship_";
+
+function shippingAddressFromMetadata(metadata: Record<string, string> = {}) {
+  const fields = Object.fromEntries(
+    Object.entries(metadata)
+      .filter(([key]) => key.startsWith(SHIPPING_METADATA_PREFIX))
+      .map(([key, value]) => [key.slice(SHIPPING_METADATA_PREFIX.length), value]),
+  );
+  return shippingAddressSchema.safeParse(fields);
+}
+
 type CartCheckoutItem = Record<string, unknown>;
 
-async function getCheckoutCartItems(userId: string) {
-  const cartResult = await query(
+// With `lockProducts`, the product rows are locked (FOR UPDATE) until the
+// surrounding transaction ends, so concurrent checkouts can't both pass the
+// stock check. Ordering by product id keeps lock acquisition deadlock-free.
+async function getCheckoutCartItems(
+  userId: string,
+  run: TxQuery = query,
+  lockProducts = false,
+) {
+  const cartResult = await run(
     `SELECT ci.quantity, p.id as product_id, p.price, p.stock_quantity, p.name
      FROM cart_items ci
      JOIN products p ON ci.product_id = p.id
-     WHERE ci.user_id = $1 AND p.is_active = true`,
+     WHERE ci.user_id = $1 AND p.is_active = true
+     ORDER BY p.id${lockProducts ? " FOR UPDATE OF p" : ""}`,
     [userId],
   );
 
   return cartResult.rows as CartCheckoutItem[];
+}
+
+// Thrown inside the checkout transaction to roll back and return a 4xx.
+// `refundable` marks failures where the customer has paid but no order can
+// be created, so the payment must be returned.
+class CheckoutError extends Error {
+  constructor(
+    message: string,
+    readonly status: 400 | 409,
+    readonly refundable = false,
+  ) {
+    super(message);
+  }
 }
 
 function calculateCartTotal(cartItems: CartCheckoutItem[]) {
@@ -438,24 +520,9 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
     const body = await c.req.json();
     const data = checkoutSchema.parse(body);
 
-    const cartItems = await getCheckoutCartItems(userId);
-
-    if (cartItems.length === 0) {
-      return c.json({ error: "Cart is empty" }, 400);
-    }
-
-    // Verify stock for all items
-    for (const item of cartItems) {
-      if (Number(item.stock_quantity) < Number(item.quantity)) {
-        return c.json({
-          error: `Insufficient stock for ${item.name}`,
-        }, 400);
-      }
-    }
-
-    const totalAmount = calculateCartTotal(cartItems);
-    const expectedStripeAmount = Math.round(totalAmount * 100);
-
+    // Verify the payment itself first. Cart and stock checks happen inside
+    // the transaction below, where a mismatch triggers a refund — checking
+    // them here would reject a paid checkout without returning the money.
     const paymentIntent = await fetchPaymentIntent(data.stripe_payment_id);
 
     if (paymentIntent.metadata?.user_id !== String(userId)) {
@@ -465,13 +532,8 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       );
     }
 
-    if (
-      paymentIntent.amount !== expectedStripeAmount ||
-      paymentIntent.currency?.toLowerCase() !== "gbp"
-    ) {
-      return c.json({
-        error: "Payment intent does not match this order total",
-      }, 400);
+    if (paymentIntent.currency?.toLowerCase() !== "gbp") {
+      return c.json({ error: "Payment intent currency is not GBP" }, 400);
     }
 
     if (paymentIntent.status !== "succeeded") {
@@ -484,38 +546,127 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       );
     }
 
-    // Reject reuse of a payment intent that already funded another order.
-    const alreadyUsed = await query(
-      "SELECT id FROM orders WHERE stripe_payment_id = $1",
-      [data.stripe_payment_id],
-    );
-    if (alreadyUsed.rows.length > 0) {
-      return c.json(
-        { error: "This payment has already been applied to an order" },
-        409,
-      );
+    if (amountRefunded(paymentIntent) > 0) {
+      return c.json({ error: "This payment has been refunded" }, 409);
     }
 
     const orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
 
-    // Create order
-    let orderResult: Awaited<ReturnType<typeof query>>;
+    // Everything below runs in one transaction: either the order, its items,
+    // the stock decrements and the cart clear all happen, or none do.
+    let result: { order: Record<string, unknown>; items: CartCheckoutItem[] };
     try {
-      orderResult = await query(
-        `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [
-          userId,
-          totalAmount,
-          JSON.stringify(data.shipping_address),
+      result = await withTransaction(async (tx) => {
+        // Serialise checkouts for the same payment, so a request that loses a
+        // race sees the winner's order below instead of refunding it.
+        await tx("SELECT pg_advisory_xact_lock(hashtext($1))", [
           data.stripe_payment_id,
-          orderStatus,
-        ],
-      );
+        ]);
+
+        const alreadyUsed = await tx(
+          "SELECT id FROM orders WHERE stripe_payment_id = $1",
+          [data.stripe_payment_id],
+        );
+        if (alreadyUsed.rows.length > 0) {
+          throw new CheckoutError(
+            "This payment has already been applied to an order",
+            409,
+          );
+        }
+
+        const shipping = shippingAddressFromMetadata(paymentIntent.metadata);
+        if (!shipping.success) {
+          throw new CheckoutError(
+            "Payment has no valid shipping address",
+            400,
+            true,
+          );
+        }
+        const shippingAddress: ShippingAddress = shipping.data;
+
+        // Re-read the cart with product rows locked. The cart or stock may have
+        // changed since the payment intent was created.
+        const lockedItems = await getCheckoutCartItems(userId, tx, true);
+        if (lockedItems.length === 0) {
+          throw new CheckoutError("Cart is empty", 409, true);
+        }
+        for (const item of lockedItems) {
+          if (Number(item.stock_quantity) < Number(item.quantity)) {
+            throw new CheckoutError(
+              `Insufficient stock for ${item.name}`,
+              409,
+              true,
+            );
+          }
+        }
+        const lockedTotal = calculateCartTotal(lockedItems);
+        if (Math.round(lockedTotal * 100) !== paymentIntent.amount) {
+          throw new CheckoutError(
+            "Cart changed during checkout and no longer matches the payment",
+            409,
+            true,
+          );
+        }
+
+        const orderResult = await tx(
+          `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING *`,
+          [
+            userId,
+            lockedTotal,
+            JSON.stringify(shippingAddress),
+            data.stripe_payment_id,
+            orderStatus,
+          ],
+        );
+        const order = orderResult.rows[0] as Record<string, unknown>;
+
+        for (const item of lockedItems) {
+          await tx(
+            `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
+             VALUES ($1, $2, $3, $4)`,
+            [order.id, item.product_id, item.quantity, item.price],
+          );
+
+          await tx(
+            `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
+            [item.quantity, item.product_id],
+          );
+        }
+
+        await tx("DELETE FROM cart_items WHERE user_id = $1", [userId]);
+
+        return { order, items: lockedItems };
+      });
     } catch (err) {
+      if (err instanceof CheckoutError) {
+        if (!err.refundable) {
+          return c.json({ error: err.message }, err.status);
+        }
+        try {
+          const refund = await refundPaymentIntent(data.stripe_payment_id);
+          return c.json({
+            error: err.message,
+            refunded: true,
+            refund_status: refund.status,
+          }, err.status);
+        } catch (refundErr) {
+          // Money taken, no order, refund failed: needs manual follow-up.
+          console.error(
+            `REFUND FAILED for payment intent ${data.stripe_payment_id} ` +
+              `(user ${userId}, reason: ${err.message}):`,
+            refundErr,
+          );
+          return c.json({
+            error: `${err.message}. Your payment could not be refunded ` +
+              "automatically; please contact support.",
+            refunded: false,
+          }, 502);
+        }
+      }
       // Unique constraint on stripe_payment_id is the authoritative guard
-      // against a concurrent request racing the check above.
+      // backstop behind the advisory lock + lookup in the transaction.
       if (err instanceof Error && /unique|duplicate/i.test(err.message)) {
         return c.json(
           { error: "This payment has already been applied to an order" },
@@ -525,26 +676,7 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       throw err;
     }
 
-    const order = orderResult.rows[0] as Record<string, unknown>;
-
-    // Insert order items and decrement stock
-    for (const item of cartItems) {
-      await query(
-        `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
-         VALUES ($1, $2, $3, $4)`,
-        [order.id, item.product_id, item.quantity, item.price],
-      );
-
-      await query(
-        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
-        [item.quantity, item.product_id],
-      );
-    }
-
-    // Clear cart
-    await query("DELETE FROM cart_items WHERE user_id = $1", [userId]);
-
-    return c.json({ order, items: cartItems }, 201);
+    return c.json(result, 201);
   } catch (err) {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
@@ -673,11 +805,11 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
     const topProductsResult = await query(
       `SELECT 
         p.id, p.name, p.price, p.stock_quantity,
-        COALESCE(SUM(oi.quantity), 0) as units_sold,
-        COALESCE(SUM(oi.quantity * oi.price_at_purchase), 0) as revenue
+        COALESCE(SUM(oi.quantity) FILTER (WHERE o.status = 'confirmed'), 0) as units_sold,
+        COALESCE(SUM(oi.quantity * oi.price_at_purchase) FILTER (WHERE o.status = 'confirmed'), 0) as revenue
        FROM products p
        LEFT JOIN order_items oi ON p.id = oi.product_id
-       LEFT JOIN orders o ON oi.order_id = o.id AND o.status = 'confirmed'
+       LEFT JOIN orders o ON oi.order_id = o.id
        WHERE p.seller_id = $1 AND p.is_active = true
        GROUP BY p.id, p.name, p.price, p.stock_quantity
        ORDER BY revenue DESC
@@ -730,6 +862,9 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
 app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
   try {
     const userId = String(c.get("userId"));
+    const { shipping_address } = createPaymentIntentSchema.parse(
+      await c.req.json(),
+    );
     const cartItems = await getCheckoutCartItems(userId);
 
     if (cartItems.length === 0) {
@@ -774,6 +909,11 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
     params.append("currency", "gbp");
     params.append("automatic_payment_methods[enabled]", "true");
     params.append("metadata[user_id]", userId);
+    for (const [field, value] of Object.entries(shipping_address)) {
+      if (value !== undefined && value !== "") {
+        params.append(`metadata[${SHIPPING_METADATA_PREFIX}${field}]`, value);
+      }
+    }
 
     const response = await fetch("https://api.stripe.com/v1/payment_intents", {
       method: "POST",
@@ -796,6 +936,9 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
       total_amount: totalAmount,
     });
   } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid shipping address", details: err.errors }, 400);
+    }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }

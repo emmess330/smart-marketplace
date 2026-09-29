@@ -44,6 +44,14 @@ interface HistoricalPoint {
   actual: number;
 }
 
+interface ForecastResponse {
+  forecast: ForecastPoint[];
+  historical: HistoricalPoint[];
+  method: string;
+  synthetic: boolean;
+  data_days: number;
+}
+
 export default function SellerDashboard() {
   const router = useRouter();
   const { user } = useAuthStore();
@@ -54,6 +62,9 @@ export default function SellerDashboard() {
   const [forecast, setForecast] = useState<ForecastPoint[]>([]);
   const [historical, setHistorical] = useState<HistoricalPoint[]>([]);
   const [forecastMethod, setForecastMethod] = useState("");
+  // Set when the seller has too little sales history and the forecast was
+  // fitted on synthetic demo data.
+  const [forecastSynthetic, setForecastSynthetic] = useState<{ dataDays: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [forecastLoading, setForecastLoading] = useState(true);
 
@@ -74,14 +85,17 @@ export default function SellerDashboard() {
       .finally(() => setLoading(false));
   }, []);
 
+  const applyForecast = (data: ForecastResponse) => {
+    setForecast(data.forecast);
+    setHistorical(data.historical);
+    setForecastMethod(data.method);
+    setForecastSynthetic(data.synthetic ? { dataDays: data.data_days } : null);
+  };
+
   useEffect(() => {
     if (!user) return;
     forecastApi.getForecast(user.id)
-      .then(res => {
-        setForecast(res.data.forecast);
-        setHistorical(res.data.historical);
-        setForecastMethod(res.data.method);
-      })
+      .then(res => applyForecast(res.data))
       .catch(() => {})
       .finally(() => setForecastLoading(false));
   }, [user]);
@@ -197,9 +211,7 @@ export default function SellerDashboard() {
               try {
                 await forecastApi.train();
                 const res = await forecastApi.getForecast(user!.id);
-                setForecast(res.data.forecast);
-                setHistorical(res.data.historical);
-                setForecastMethod(res.data.method);
+                applyForecast(res.data);
               } finally {
                 setForecastLoading(false);
               }
@@ -209,6 +221,13 @@ export default function SellerDashboard() {
             Retrain
           </button>
         </div>
+
+        {!forecastLoading && forecastSynthetic && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Not enough sales history yet ({forecastSynthetic.dataDays} of 7 days needed).
+            This chart is illustrative demo data, not a prediction of your sales.
+          </div>
+        )}
 
         {forecastLoading ? (
           <div className="h-40 flex items-center justify-center text-gray-400 text-sm">

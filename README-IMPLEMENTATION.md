@@ -123,14 +123,16 @@ Or run the SQL files in order yourself:
 docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/001_init.sql
 docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/002_seed.sql
 docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/003_orders_payment_unique.sql
+docker exec -i marketplace_db psql -U marketplace_user -d marketplace < database/migrations/004_sellers_user_unique.sql
 ```
 
-Or with local `psql` (stop on first error for `001_init` and `003`):
+Or with local `psql` (stop on first error for every file except the seed):
 
 ```bash
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/001_init.sql
 psql "$DB_URL" -f database/migrations/002_seed.sql
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/003_orders_payment_unique.sql
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f database/migrations/004_sellers_user_unique.sql
 ```
 
 Without `001_init.sql`, ML scripts and the app will fail with errors like `relation "order_items" does not exist`.
@@ -155,11 +157,13 @@ Optional: **Kibana** on port 5601 for debugging indices:
 docker compose up -d kibana
 ```
 
-After backends are running, populate the index once (example):
+After backends are running, populate the index once. Reindexing is operator-only: set `ADMIN_KEY` in `backend/.env` (e.g. `openssl rand -hex 32`) and send it as a header:
 
 ```bash
-curl -X POST http://localhost:8005/search/index
+curl -X POST http://localhost:8005/search/index -H "X-Admin-Key: $ADMIN_KEY"
 ```
+
+The same key is needed to retrain the recommender over HTTP (`POST http://localhost:8006/recommend/retrain`); running `python train.py` directly still works without it.
 
 ## 4. Deno backend services
 

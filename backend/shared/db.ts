@@ -1,4 +1,4 @@
-import { Pool } from "postgres";
+import { Pool, PostgresError } from "postgres";
 
 const pool = new Pool({
   hostname: Deno.env.get("DB_HOST") || "localhost",
@@ -16,6 +16,33 @@ export async function query(sql: string, params?: unknown[]) {
   } finally {
     client.release();
   }
+}
+
+export type TxQuery = (sql: string, params?: unknown[]) => ReturnType<typeof query>;
+
+// Runs `fn` on a single pooled connection inside BEGIN/COMMIT, rolling back
+// if it throws. Use for multi-statement writes that must succeed or fail as one.
+export async function withTransaction<T>(fn: (tx: TxQuery) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.queryObject("BEGIN");
+    try {
+      const result = await fn((sql, params) => client.queryObject(sql, params));
+      await client.queryObject("COMMIT");
+      return result;
+    } catch (err) {
+      await client.queryObject("ROLLBACK");
+      throw err;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+// True for a UNIQUE violation, optionally only on the named constraint.
+export function isUniqueViolation(err: unknown, constraint?: string) {
+  return err instanceof PostgresError && err.fields.code === "23505" &&
+    (!constraint || err.fields.constraint === constraint);
 }
 
 export default pool;

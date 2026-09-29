@@ -25,7 +25,7 @@ Each backend concern is a **separate Deno process with its own port** — there 
 
 Data model (`database/migrations/001_init.sql`): `users` → `sellers` (1:1 extension, not a subtype column) → `products` → `cart_items` / `orders` → `order_items`. `sessions` stores refresh tokens. All PKs are `gen_random_uuid()`; `updated_at` is kept current by a Postgres trigger, not application code.
 
-**Search sync**: the Products service pushes documents to Elasticsearch on create/update/(soft)delete via `syncProductToSearch()` in `backend/products/main.ts` — this is fire-and-forget (`try/catch` with a `console.warn`), so ES can drift from Postgres if indexing fails. There's no reconciliation job; if search results look stale, re-run `POST /search/index` on the Search service.
+**Search sync**: the Products service pushes documents to Elasticsearch on create/update/(soft)delete via `syncProductToSearch()` in `backend/products/main.ts` — this is fire-and-forget (`try/catch` with a `console.warn`), so ES can drift from Postgres if indexing fails. There's no reconciliation job; if search results look stale, re-run `POST /search/index` on the Search service (requires `X-Admin-Key: $ADMIN_KEY` from `backend/.env`; it drops and rebuilds the index).
 
 **Soft deletes**: products are never hard-deleted — `DELETE /products/:id` sets `is_active = false`. All product reads filter on `is_active = true`.
 

@@ -13,7 +13,13 @@ interface Product {
   stock_quantity: number;
   category_name: string;
   is_active: boolean;
-  images?: string[];  // array of URL strings
+  // Seller-created products store URL strings; Kaggle-imported ones store { url }.
+  images?: (string | { url: string })[];
+}
+
+function firstImageUrl(product: Product) {
+  const first = product.images?.[0];
+  return typeof first === "string" ? first : first?.url ?? "";
 }
 
 export default function SellerProductsPage() {
@@ -80,7 +86,7 @@ export default function SellerProductsPage() {
 
   const handleEdit = (product: Product) => {
     setEditingProduct(product);
-    const currentImageUrl = product.images?.[0] || "";
+    const currentImageUrl = firstImageUrl(product);
     setFormData({
       name: product.name,
       description: product.description || "",
@@ -167,13 +173,7 @@ export default function SellerProductsPage() {
               <tr key={product.id} className="border-b hover:bg-gray-50">
                 <td className="p-3">
   {(() => {
-    let imgUrl = null;
-    if (product.images && product.images.length > 0) {
-      const first = product.images[0];
-      if (typeof first === "string") imgUrl = first;
-      else if (first && typeof first === "object" && "url" in first) imgUrl = first.url;
-    }
-    if (!imgUrl) imgUrl = `https://picsum.photos/seed/${product.id}/48/48`;
+    const imgUrl = firstImageUrl(product) || `https://picsum.photos/seed/${product.id}/48/48`;
     return (
       <img
         src={imgUrl}

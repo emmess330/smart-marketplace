@@ -18,6 +18,15 @@ const SEARCH_URL = `${baseURL}:8005`;
 const RECOMMEND_URL = `${baseURL}:8006`;
 const FORECAST_URL = `${baseURL}:8007`;
 
+export interface ShippingAddress {
+  full_name: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  postal_code: string;
+  country: string; // ISO 3166-1 alpha-2, e.g. "GB"
+}
+
 function authHeaders() {
   const token = Cookies.get("access_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -86,8 +95,13 @@ export const ordersApi = {
   removeFromCart: (id: string) =>
     axios.delete(`${ORDERS_URL}/cart/${id}`, { headers: authHeaders() }),
 
-  checkout: (data: object) =>
-    axios.post(`${ORDERS_URL}/orders/checkout`, data, { headers: authHeaders() }),
+  // The shipping address was attached to the payment intent; only its id is sent.
+  checkout: (stripePaymentId: string) =>
+    axios.post(
+      `${ORDERS_URL}/orders/checkout`,
+      { stripe_payment_id: stripePaymentId },
+      { headers: authHeaders() },
+    ),
 
   getOrders: () =>
     axios.get(`${ORDERS_URL}/orders`, { headers: authHeaders() }),
@@ -95,10 +109,10 @@ export const ordersApi = {
   getOrder: (id: string) =>
     axios.get(`${ORDERS_URL}/orders/${id}`, { headers: authHeaders() }),
 
-  createPaymentIntent: () =>
+  createPaymentIntent: (shippingAddress: ShippingAddress) =>
     axios.post(
       `${ORDERS_URL}/orders/create-payment-intent`,
-      {},
+      { shipping_address: shippingAddress },
       { headers: authHeaders() },
     ),
 };
@@ -110,8 +124,13 @@ export const usersApi = {
   updateProfile: (data: object) =>
     axios.put(`${USERS_URL}/users/me`, data, { headers: authHeaders() }),
 
-  createSellerProfile: (data: object) =>
-    axios.post(`${USERS_URL}/users/seller`, data, { headers: authHeaders() }),
+  // Becoming a seller returns a fresh token pair carrying the seller role.
+  createSellerProfile: async (data: object) => {
+    const res = await axios.post(`${USERS_URL}/users/seller`, data, { headers: authHeaders() });
+    Cookies.set("access_token", res.data.accessToken, { expires: 1 });
+    Cookies.set("refresh_token", res.data.refreshToken, { expires: 7 });
+    return res;
+  },
 
   getSeller: (id: string) =>
     axios.get(`${USERS_URL}/users/sellers/${id}`),
@@ -129,14 +148,11 @@ export const searchApi = {
 
   suggest: (q: string) =>
     axios.get(`${SEARCH_URL}/search/suggest`, { params: { q } }),
-
-  index: () =>
-    axios.post(`${SEARCH_URL}/search/index`),
 };
 
 export const recommendApi = {
   forUser: (userId: string) =>
-    axios.get(`${RECOMMEND_URL}/recommend/user/${userId}`),
+    axios.get(`${RECOMMEND_URL}/recommend/user/${userId}`, { headers: authHeaders() }),
 
   similar: (productId: string) =>
     axios.get(`${RECOMMEND_URL}/recommend/similar/${productId}`),
@@ -152,10 +168,11 @@ export const analyticsApi = {
 
 export const forecastApi = {
   getForecast: (userId: string) =>
-    axios.get(`${FORECAST_URL}/forecast/${userId}`),
+    axios.get(`${FORECAST_URL}/forecast/${userId}`, { headers: authHeaders() }),
 
   train: (sellerId?: string) =>
     axios.post(`${FORECAST_URL}/forecast/train`, null, {
       params: sellerId ? { seller_id: sellerId } : {},
+      headers: authHeaders(),
     }),
 };
