@@ -2,7 +2,7 @@ import { Hono } from "hono/mod.ts";
 import { hash, compare } from "bcrypt";
 import { z } from "zod";
 import { query } from "../shared/db.ts";
-import { generateTokens } from "../shared/jwt.ts";
+import { generateTokens, verifyToken } from "../shared/jwt.ts";
 import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
@@ -135,7 +135,6 @@ app.get("/auth/me", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
   try {
-    const { verifyToken } = await import("../shared/jwt.ts");
     const payload = await verifyToken(authHeader.slice(7));
     const result = await query(
       "SELECT id, email, full_name, role FROM users WHERE id = $1",

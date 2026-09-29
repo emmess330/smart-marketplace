@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 import pickle
@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from db_config import get_db_url
+from auth import TokenPayload, require_auth
 
 app = FastAPI(title="Recommendation Service")
 
@@ -214,7 +215,7 @@ def health():
     }
 
 @app.post("/recommend/retrain")
-def retrain():
+def retrain(payload: TokenPayload = Depends(require_auth)):
     try:
         from train import train_and_save
         train_and_save()

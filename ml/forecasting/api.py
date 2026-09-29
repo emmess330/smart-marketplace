@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 import pandas as pd
@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from db_config import get_db_url
+from auth import TokenPayload, require_auth, require_seller
 
 app = FastAPI(title="Forecasting Service")
 
@@ -46,7 +47,14 @@ def health():
     return {"status": "ok"}
 
 @app.post("/forecast/train")
-def train(seller_id: str = None):
+def train(seller_id: str = None, payload: TokenPayload = Depends(require_auth)):
+    require_seller(payload)
+    if seller_id:
+        own_seller_id = get_seller_id(payload.sub)
+        if seller_id != own_seller_id:
+            raise HTTPException(
+                status_code=403, detail="Cannot train a forecast for another seller"
+            )
     try:
         from train import train_forecast
         result = train_forecast(seller_id)
@@ -60,7 +68,9 @@ def train(seller_id: str = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/forecast/{user_id}")
-def get_forecast(user_id: str):
+def get_forecast(user_id: str, payload: TokenPayload = Depends(require_auth)):
+    if user_id != payload.sub:
+        raise HTTPException(status_code=403, detail="Cannot view another user's forecast")
     try:
         seller_id = get_seller_id(user_id)
         if not seller_id:

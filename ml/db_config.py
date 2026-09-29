@@ -47,6 +47,17 @@ def get_db_url() -> str:
     return _normalize_db_url(url)
 
 
+def get_jwt_secret() -> str:
+    """Same HS256 signing secret the Deno auth service uses (backend/.env JWT_SECRET)."""
+    secret = (os.getenv("JWT_SECRET") or "").strip()
+    if not secret or secret == "your-super-secret-key-change-this":
+        raise RuntimeError(
+            "JWT_SECRET is not set (or is still the .env.example placeholder). "
+            "Set a real random value in backend/.env before starting this service."
+        )
+    return secret
+
+
 ROLE_MISSING_HINT = """
 PostgreSQL answered on {host_port}, but this server has no role "marketplace_user".
 

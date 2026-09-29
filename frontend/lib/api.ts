@@ -152,10 +152,11 @@ export const analyticsApi = {
 
 export const forecastApi = {
   getForecast: (userId: string) =>
-    axios.get(`${FORECAST_URL}/forecast/${userId}`),
+    axios.get(`${FORECAST_URL}/forecast/${userId}`, { headers: authHeaders() }),
 
   train: (sellerId?: string) =>
     axios.post(`${FORECAST_URL}/forecast/train`, null, {
       params: sellerId ? { seller_id: sellerId } : {},
+      headers: authHeaders(),
     }),
 };
