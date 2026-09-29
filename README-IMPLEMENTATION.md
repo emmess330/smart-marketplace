@@ -155,10 +155,10 @@ Optional: **Kibana** on port 5601 for debugging indices:
 docker compose up -d kibana
 ```
 
-After backends are running, populate the index once (example):
+After backends are running, populate the index once. Reindexing is operator-only: set `SEARCH_ADMIN_KEY` in `backend/.env` (e.g. `openssl rand -hex 32`) and send it as a header:
 
 ```bash
-curl -X POST http://localhost:8005/search/index
+curl -X POST http://localhost:8005/search/index -H "X-Admin-Key: $SEARCH_ADMIN_KEY"
 ```
 
 ## 4. Deno backend services

@@ -58,8 +58,33 @@ async function createIndex() {
   }
 }
 
-// POST /search/index — index all products from PostgreSQL into ES
+async function sha256(value: string) {
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+  );
+}
+
+// Compares digests so the check takes the same time however much of the key
+// matches.
+async function isValidAdminKey(provided: string | undefined) {
+  const expected = Deno.env.get("SEARCH_ADMIN_KEY");
+  if (!expected || !provided) return false;
+  const [a, b] = await Promise.all([sha256(provided), sha256(expected)]);
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i += 1) mismatch |= a[i] ^ b[i];
+  return mismatch === 0;
+}
+
+// POST /search/index — index all products from PostgreSQL into ES.
+// Operator-only: it drops and rebuilds the index, so it requires the
+// X-Admin-Key header to match SEARCH_ADMIN_KEY in backend/.env.
 app.post("/search/index", async (c) => {
+  if (!Deno.env.get("SEARCH_ADMIN_KEY")) {
+    return c.json({ error: "Reindexing disabled: set SEARCH_ADMIN_KEY in backend/.env" }, 503);
+  }
+  if (!(await isValidAdminKey(c.req.header("X-Admin-Key")))) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
   try {
     const result = await query(
       `SELECT p.id, p.name, p.description, p.price, p.stock_quantity,
