@@ -18,6 +18,15 @@ const SEARCH_URL = `${baseURL}:8005`;
 const RECOMMEND_URL = `${baseURL}:8006`;
 const FORECAST_URL = `${baseURL}:8007`;
 
+export interface ShippingAddress {
+  full_name: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  postal_code: string;
+  country: string; // ISO 3166-1 alpha-2, e.g. "GB"
+}
+
 function authHeaders() {
   const token = Cookies.get("access_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -86,8 +95,13 @@ export const ordersApi = {
   removeFromCart: (id: string) =>
     axios.delete(`${ORDERS_URL}/cart/${id}`, { headers: authHeaders() }),
 
-  checkout: (data: object) =>
-    axios.post(`${ORDERS_URL}/orders/checkout`, data, { headers: authHeaders() }),
+  // The shipping address was attached to the payment intent; only its id is sent.
+  checkout: (stripePaymentId: string) =>
+    axios.post(
+      `${ORDERS_URL}/orders/checkout`,
+      { stripe_payment_id: stripePaymentId },
+      { headers: authHeaders() },
+    ),
 
   getOrders: () =>
     axios.get(`${ORDERS_URL}/orders`, { headers: authHeaders() }),
@@ -95,10 +109,10 @@ export const ordersApi = {
   getOrder: (id: string) =>
     axios.get(`${ORDERS_URL}/orders/${id}`, { headers: authHeaders() }),
 
-  createPaymentIntent: () =>
+  createPaymentIntent: (shippingAddress: ShippingAddress) =>
     axios.post(
       `${ORDERS_URL}/orders/create-payment-intent`,
-      {},
+      { shipping_address: shippingAddress },
       { headers: authHeaders() },
     ),
 };

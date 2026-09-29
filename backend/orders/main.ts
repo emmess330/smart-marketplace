@@ -220,17 +220,38 @@ const addToCartSchema = z.object({
   quantity: z.number().int().positive(),
 });
 
+const shippingAddressSchema = z.object({
+  full_name: z.string().trim().min(2).max(255),
+  line1: z.string().trim().min(1).max(255),
+  line2: z.string().trim().max(255).optional(),
+  city: z.string().trim().min(1).max(100),
+  country: z.string().trim().length(2).toUpperCase(), // ISO 3166-1 alpha-2
+  postal_code: z.string().trim().min(2).max(20),
+});
+type ShippingAddress = z.infer<typeof shippingAddressSchema>;
+
+const createPaymentIntentSchema = z.object({
+  shipping_address: shippingAddressSchema,
+});
+
+// The shipping address is not accepted here: it was validated when the
+// payment intent was created and is read back from the intent's metadata,
+// so it can't be rejected (or changed) after the customer has paid.
 const checkoutSchema = z.object({
-  shipping_address: z.object({
-    full_name: z.string(),
-    line1: z.string(),
-    line2: z.string().optional(),
-    city: z.string(),
-    country: z.string(),
-    postal_code: z.string(),
-  }),
   stripe_payment_id: z.string(),
 });
+
+// Stored as one metadata key per field (Stripe caps each value at 500 chars).
+const SHIPPING_METADATA_PREFIX = "ship_";
+
+function shippingAddressFromMetadata(metadata: Record<string, string> = {}) {
+  const fields = Object.fromEntries(
+    Object.entries(metadata)
+      .filter(([key]) => key.startsWith(SHIPPING_METADATA_PREFIX))
+      .map(([key, value]) => [key.slice(SHIPPING_METADATA_PREFIX.length), value]),
+  );
+  return shippingAddressSchema.safeParse(fields);
+}
 
 type CartCheckoutItem = Record<string, unknown>;
 
@@ -553,6 +574,16 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
           );
         }
 
+        const shipping = shippingAddressFromMetadata(paymentIntent.metadata);
+        if (!shipping.success) {
+          throw new CheckoutError(
+            "Payment has no valid shipping address",
+            400,
+            true,
+          );
+        }
+        const shippingAddress: ShippingAddress = shipping.data;
+
         // Re-read the cart with product rows locked. The cart or stock may have
         // changed since the payment intent was created.
         const lockedItems = await getCheckoutCartItems(userId, tx, true);
@@ -584,7 +615,7 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
           [
             userId,
             lockedTotal,
-            JSON.stringify(data.shipping_address),
+            JSON.stringify(shippingAddress),
             data.stripe_payment_id,
             orderStatus,
           ],
@@ -831,6 +862,9 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
 app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
   try {
     const userId = String(c.get("userId"));
+    const { shipping_address } = createPaymentIntentSchema.parse(
+      await c.req.json(),
+    );
     const cartItems = await getCheckoutCartItems(userId);
 
     if (cartItems.length === 0) {
@@ -875,6 +909,11 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
     params.append("currency", "gbp");
     params.append("automatic_payment_methods[enabled]", "true");
     params.append("metadata[user_id]", userId);
+    for (const [field, value] of Object.entries(shipping_address)) {
+      if (value !== undefined && value !== "") {
+        params.append(`metadata[${SHIPPING_METADATA_PREFIX}${field}]`, value);
+      }
+    }
 
     const response = await fetch("https://api.stripe.com/v1/payment_intents", {
       method: "POST",
@@ -897,6 +936,9 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
       total_amount: totalAmount,
     });
   } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid shipping address", details: err.errors }, 400);
+    }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }
