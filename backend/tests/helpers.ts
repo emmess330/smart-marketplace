@@ -347,8 +347,9 @@ export async function requireMigrations() {
     `SELECT conname FROM pg_constraint
      WHERE conname IN ('orders_stripe_payment_id_unique', 'sellers_user_id_unique')`,
   );
-  if (result.rows.length < 2) {
-    throw new Error("Database is missing migrations 003/004 — run ./database/apply-migrations.sh");
+  const pending = await query("SELECT to_regclass('pending_checkouts') IS NOT NULL AS present");
+  if (result.rows.length < 2 || !(pending.rows[0] as { present: boolean }).present) {
+    throw new Error("Database is missing migrations 003-005 — run ./database/apply-migrations.sh");
   }
 }
 

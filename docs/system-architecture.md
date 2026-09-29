@@ -37,7 +37,7 @@ flowchart LR
 4. PostgreSQL is the source of truth for users, sellers, products, carts, and orders.
 5. Product data is indexed into Elasticsearch for smart search and autocomplete.
 6. Python FastAPI services provide recommendations and sales forecasting.
-7. Stripe sandbox handles payment intents and checkout-related payment flow.
+7. Stripe sandbox handles payment intents. When a payment intent is created, the orders service snapshots the cart, total and shipping address (`pending_checkouts`); the order is created from that snapshot by whichever arrives first, the browser's checkout call or Stripe's `payment_intent.succeeded` webhook, and the payment is refunded automatically if it can't be fulfilled.
 8. Kibana is used to inspect Elasticsearch indices and debug search queries.
 
 ## Ports
