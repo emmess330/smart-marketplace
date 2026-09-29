@@ -19,6 +19,7 @@ type StripePaymentIntent = {
   currency?: string;
   status: string;
   metadata?: Record<string, string>;
+  latest_charge?: { amount_refunded?: number } | string | null;
 };
 
 type StripeWebhookEvent = {
@@ -136,10 +137,12 @@ async function fetchPaymentIntent(paymentIntentId: string) {
     throw new Error("STRIPE_SECRET_KEY not set or placeholder");
   }
 
+  // Expand latest_charge so callers can see refunds: a refunded payment
+  // intent keeps status "succeeded".
   const response = await fetch(
     `https://api.stripe.com/v1/payment_intents/${
       encodeURIComponent(paymentIntentId)
-    }`,
+    }?expand[]=latest_charge`,
     {
       headers: {
         "Authorization": `Bearer ${stripeSecretKey}`,
@@ -155,6 +158,43 @@ async function fetchPaymentIntent(paymentIntentId: string) {
   }
 
   return data as StripePaymentIntent;
+}
+
+function amountRefunded(paymentIntent: StripePaymentIntent) {
+  const charge = paymentIntent.latest_charge;
+  return charge && typeof charge === "object"
+    ? Number(charge.amount_refunded || 0)
+    : 0;
+}
+
+// Fully refunds a payment intent. The idempotency key makes retries (and
+// concurrent failed checkouts for the same payment) refund at most once.
+async function refundPaymentIntent(paymentIntentId: string) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
+    throw new Error("STRIPE_SECRET_KEY not set or placeholder");
+  }
+
+  const params = new URLSearchParams();
+  params.append("payment_intent", paymentIntentId);
+  params.append("metadata[reason]", "checkout_failed");
+
+  const response = await fetch("https://api.stripe.com/v1/refunds", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${stripeSecretKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Idempotency-Key": `checkout-refund-${paymentIntentId}`,
+    },
+    body: params,
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Unable to refund payment intent");
+  }
+
+  return data as { id: string; status: string };
 }
 
 async function updateOrderStatusFromPaymentIntent(
@@ -215,8 +255,14 @@ async function getCheckoutCartItems(
 }
 
 // Thrown inside the checkout transaction to roll back and return a 4xx.
+// `refundable` marks failures where the customer has paid but no order can
+// be created, so the payment must be returned.
 class CheckoutError extends Error {
-  constructor(message: string, readonly status: 400 | 409) {
+  constructor(
+    message: string,
+    readonly status: 400 | 409,
+    readonly refundable = false,
+  ) {
     super(message);
   }
 }
@@ -453,24 +499,9 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
     const body = await c.req.json();
     const data = checkoutSchema.parse(body);
 
-    const cartItems = await getCheckoutCartItems(userId);
-
-    if (cartItems.length === 0) {
-      return c.json({ error: "Cart is empty" }, 400);
-    }
-
-    // Verify stock for all items
-    for (const item of cartItems) {
-      if (Number(item.stock_quantity) < Number(item.quantity)) {
-        return c.json({
-          error: `Insufficient stock for ${item.name}`,
-        }, 400);
-      }
-    }
-
-    const totalAmount = calculateCartTotal(cartItems);
-    const expectedStripeAmount = Math.round(totalAmount * 100);
-
+    // Verify the payment itself first. Cart and stock checks happen inside
+    // the transaction below, where a mismatch triggers a refund — checking
+    // them here would reject a paid checkout without returning the money.
     const paymentIntent = await fetchPaymentIntent(data.stripe_payment_id);
 
     if (paymentIntent.metadata?.user_id !== String(userId)) {
@@ -480,13 +511,8 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       );
     }
 
-    if (
-      paymentIntent.amount !== expectedStripeAmount ||
-      paymentIntent.currency?.toLowerCase() !== "gbp"
-    ) {
-      return c.json({
-        error: "Payment intent does not match this order total",
-      }, 400);
+    if (paymentIntent.currency?.toLowerCase() !== "gbp") {
+      return c.json({ error: "Payment intent currency is not GBP" }, 400);
     }
 
     if (paymentIntent.status !== "succeeded") {
@@ -499,16 +525,8 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       );
     }
 
-    // Reject reuse of a payment intent that already funded another order.
-    const alreadyUsed = await query(
-      "SELECT id FROM orders WHERE stripe_payment_id = $1",
-      [data.stripe_payment_id],
-    );
-    if (alreadyUsed.rows.length > 0) {
-      return c.json(
-        { error: "This payment has already been applied to an order" },
-        409,
-      );
+    if (amountRefunded(paymentIntent) > 0) {
+      return c.json({ error: "This payment has been refunded" }, 409);
     }
 
     const orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
@@ -518,22 +536,44 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
     let result: { order: Record<string, unknown>; items: CartCheckoutItem[] };
     try {
       result = await withTransaction(async (tx) => {
+        // Serialise checkouts for the same payment, so a request that loses a
+        // race sees the winner's order below instead of refunding it.
+        await tx("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          data.stripe_payment_id,
+        ]);
+
+        const alreadyUsed = await tx(
+          "SELECT id FROM orders WHERE stripe_payment_id = $1",
+          [data.stripe_payment_id],
+        );
+        if (alreadyUsed.rows.length > 0) {
+          throw new CheckoutError(
+            "This payment has already been applied to an order",
+            409,
+          );
+        }
+
         // Re-read the cart with product rows locked. The cart or stock may have
-        // changed since the payment was verified above.
+        // changed since the payment intent was created.
         const lockedItems = await getCheckoutCartItems(userId, tx, true);
         if (lockedItems.length === 0) {
-          throw new CheckoutError("Cart is empty", 400);
+          throw new CheckoutError("Cart is empty", 409, true);
         }
         for (const item of lockedItems) {
           if (Number(item.stock_quantity) < Number(item.quantity)) {
-            throw new CheckoutError(`Insufficient stock for ${item.name}`, 409);
+            throw new CheckoutError(
+              `Insufficient stock for ${item.name}`,
+              409,
+              true,
+            );
           }
         }
         const lockedTotal = calculateCartTotal(lockedItems);
-        if (Math.round(lockedTotal * 100) !== expectedStripeAmount) {
+        if (Math.round(lockedTotal * 100) !== paymentIntent.amount) {
           throw new CheckoutError(
             "Cart changed during checkout and no longer matches the payment",
             409,
+            true,
           );
         }
 
@@ -570,10 +610,32 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       });
     } catch (err) {
       if (err instanceof CheckoutError) {
-        return c.json({ error: err.message }, err.status);
+        if (!err.refundable) {
+          return c.json({ error: err.message }, err.status);
+        }
+        try {
+          const refund = await refundPaymentIntent(data.stripe_payment_id);
+          return c.json({
+            error: err.message,
+            refunded: true,
+            refund_status: refund.status,
+          }, err.status);
+        } catch (refundErr) {
+          // Money taken, no order, refund failed: needs manual follow-up.
+          console.error(
+            `REFUND FAILED for payment intent ${data.stripe_payment_id} ` +
+              `(user ${userId}, reason: ${err.message}):`,
+            refundErr,
+          );
+          return c.json({
+            error: `${err.message}. Your payment could not be refunded ` +
+              "automatically; please contact support.",
+            refunded: false,
+          }, 502);
+        }
       }
       // Unique constraint on stripe_payment_id is the authoritative guard
-      // against a concurrent request racing the check above.
+      // backstop behind the advisory lock + lookup in the transaction.
       if (err instanceof Error && /unique|duplicate/i.test(err.message)) {
         return c.json(
           { error: "This payment has already been applied to an order" },

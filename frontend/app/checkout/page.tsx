@@ -54,8 +54,10 @@ function CheckoutForm({ clientSecret, amount }: { clientSecret: string; amount: 
       } catch (err) {
         let message = "Order placement failed, but payment succeeded. Please contact support.";
         if (axios.isAxiosError(err)) {
-          const data = err.response?.data as { error?: string } | undefined;
-          if (data?.error) {
+          const data = err.response?.data as { error?: string; refunded?: boolean } | undefined;
+          if (data?.refunded) {
+            message = `We couldn't place your order (${data.error}). Your payment has been refunded.`;
+          } else if (data?.error) {
             message = `${message} Reason: ${data.error}`;
           }
         }
