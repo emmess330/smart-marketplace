@@ -1,5 +1,6 @@
-import axios from "axios";
+import axios, { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 import Cookies from "js-cookie";
+import { useAuthStore } from "@/lib/store";
 
 // Dynamically determine API base URL
 let baseURL = "http://localhost";
@@ -32,26 +33,88 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Both cookies live as long as the refresh token (7 days). The access token
+// inside expires after an hour and is renewed by the interceptor below, so
+// the cookie's lifetime is not the token's.
+function setTokens(accessToken: string, refreshToken: string) {
+  Cookies.set("access_token", accessToken, { expires: 7 });
+  Cookies.set("refresh_token", refreshToken, { expires: 7 });
+}
+
+function clearTokens() {
+  Cookies.remove("access_token");
+  Cookies.remove("refresh_token");
+}
+
+// One refresh at a time: requests that hit a 401 together share it. The
+// server rotates refresh tokens, so parallel refreshes would all but one fail.
+let refreshing: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = Cookies.get("refresh_token");
+  if (!refreshToken) return null;
+  try {
+    const res = await axios.post(`${AUTH_URL}/auth/refresh`, { refreshToken });
+    setTokens(res.data.accessToken, res.data.refreshToken);
+    return res.data.accessToken;
+  } catch {
+    // Another tab may have rotated the token first; its new tokens are in the
+    // shared cookies, so use those rather than logging out.
+    const latest = Cookies.get("refresh_token");
+    return latest && latest !== refreshToken ? Cookies.get("access_token") ?? null : null;
+  }
+}
+
+type RetryableConfig = InternalAxiosRequestConfig & { _retriedAfterRefresh?: boolean };
+
+// On a 401 for a request that sent a token, refresh once and retry it. Guarded
+// so hot reload doesn't register the interceptor twice.
+const globalWithFlag = globalThis as typeof globalThis & { __authRefreshInterceptor?: boolean };
+if (typeof window !== "undefined" && !globalWithFlag.__authRefreshInterceptor) {
+  globalWithFlag.__authRefreshInterceptor = true;
+  axios.interceptors.response.use(undefined, async (error: AxiosError) => {
+    const config = error.config as RetryableConfig | undefined;
+    const headers = AxiosHeaders.from(config?.headers ?? {});
+    if (
+      error.response?.status !== 401 || !config || config._retriedAfterRefresh ||
+      !headers.has("Authorization")
+    ) {
+      throw error;
+    }
+    config._retriedAfterRefresh = true;
+
+    refreshing ??= refreshAccessToken().finally(() => {
+      refreshing = null;
+    });
+    const accessToken = await refreshing;
+    if (!accessToken) {
+      clearTokens();
+      useAuthStore.getState().logout();
+      throw error;
+    }
+    headers.set("Authorization", `Bearer ${accessToken}`);
+    config.headers = headers;
+    return axios(config);
+  });
+}
+
 export const authApi = {
   register: async (data: { email: string; password: string; full_name: string; role: string }) => {
     const res = await axios.post(`${AUTH_URL}/auth/register`, data);
-    Cookies.set("access_token", res.data.accessToken, { expires: 1 });
-    Cookies.set("refresh_token", res.data.refreshToken, { expires: 7 });
+    setTokens(res.data.accessToken, res.data.refreshToken);
     return res;
   },
 
   login: async (data: { email: string; password: string }) => {
     const res = await axios.post(`${AUTH_URL}/auth/login`, data);
-    Cookies.set("access_token", res.data.accessToken, { expires: 1 });
-    Cookies.set("refresh_token", res.data.refreshToken, { expires: 7 });
+    setTokens(res.data.accessToken, res.data.refreshToken);
     return res;
   },
 
   logout: async () => {
     const refreshToken = Cookies.get("refresh_token");
     await axios.post(`${AUTH_URL}/auth/logout`, { refreshToken });
-    Cookies.remove("access_token");
-    Cookies.remove("refresh_token");
+    clearTokens();
   },
 
   me: () =>
@@ -127,8 +190,7 @@ export const usersApi = {
   // Becoming a seller returns a fresh token pair carrying the seller role.
   createSellerProfile: async (data: object) => {
     const res = await axios.post(`${USERS_URL}/users/seller`, data, { headers: authHeaders() });
-    Cookies.set("access_token", res.data.accessToken, { expires: 1 });
-    Cookies.set("refresh_token", res.data.refreshToken, { expires: 7 });
+    setTokens(res.data.accessToken, res.data.refreshToken);
     return res;
   },
 
