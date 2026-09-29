@@ -6,7 +6,7 @@ const app = new Hono();
 app.use("*", corsConfig);
 
 const ES_URL = Deno.env.get("ES_HOST") || "http://localhost:9200";
-const INDEX = "products";
+const INDEX = Deno.env.get("ES_INDEX") ?? "products";
 
 async function esRequest(method: string, path: string, body?: unknown) {
   const res = await fetch(`${ES_URL}${path}`, {
@@ -142,6 +142,21 @@ app.post("/search/index", async (c) => {
   }
 });
 
+// Runs the exact/prefix query first and retries with typo tolerance only if
+// that finds nothing, so fuzzy noise never mixes with real matches. (This
+// replaced a fixed min_score floor: scores shift with index size — an exact
+// one-word match scored between 13 and 16 across indexes — so the floor
+// hid real matches as well as noise.)
+async function searchWithFuzzyFallback(
+  q: string,
+  build: (fuzzyClause?: unknown) => Record<string, unknown>,
+  fuzzyClause: unknown,
+) {
+  const precise = await esRequest("POST", `/${INDEX}/_search`, build());
+  if (q.length < 4 || (precise.hits?.total?.value ?? 0) > 0) return precise;
+  return await esRequest("POST", `/${INDEX}/_search`, build(fuzzyClause));
+}
+
 // GET /search?q=&category=&min_price=&max_price=&page=&limit=
 app.get("/search", async (c) => {
   try {
@@ -162,7 +177,6 @@ app.get("/search", async (c) => {
       filter.push({ term: { category_name: category } });
     }
 
-    const words = q.split(/\s+/).filter(Boolean);
     const should: unknown[] = q
       ? [
         { term: { category_name: { value: q, boost: 8 } } },
@@ -184,40 +198,34 @@ app.get("/search", async (c) => {
       ]
       : [];
 
-    if (q.length >= 4) {
-      should.push({
-        multi_match: {
-          query: q,
-          fields: [
-            "name^4",
-            "description^2",
-            "tags^2",
-            "category_name^2",
-            "store_name",
-          ],
-          fuzziness: q.length <= 6 ? 2 : "AUTO",
-          prefix_length: 0,
-          max_expansions: 20,
-        },
-      });
-    }
+    const fuzzy = {
+      multi_match: {
+        query: q,
+        fields: [
+          "name^4",
+          "description^2",
+          "tags^2",
+          "category_name^2",
+          "store_name",
+        ],
+        fuzziness: "AUTO", // 1 edit for 3–5 chars, 2 for longer; a flat 2 matched e.g. "kettle" to "ketch"
+        prefix_length: 0,
+        max_expansions: 20,
+      },
+    };
 
-    const query = q
-      ? {
-        bool: {
-          filter,
-          should,
-          minimum_should_match: 1,
-        },
-      }
-      : { bool: { filter } };
-    const minScore = q.length >= 4 && words.length === 1 ? 16 : undefined;
-
-    const esQuery = {
+    const buildQuery = (fuzzyClause?: unknown) => ({
       from,
       size: limit,
-      ...(minScore ? { min_score: minScore } : {}),
-      query,
+      query: q
+        ? {
+          bool: {
+            filter,
+            should: fuzzyClause ? [...should, fuzzyClause] : should,
+            minimum_should_match: 1,
+          },
+        }
+        : { bool: { filter } },
       sort: q ? ["_score"] : [{ created_at: "desc" }],
       aggs: {
         categories: {
@@ -227,9 +235,9 @@ app.get("/search", async (c) => {
           stats: { field: "price" },
         },
       },
-    };
+    });
 
-    const result = await esRequest("POST", `/${INDEX}/_search`, esQuery);
+    const result = await searchWithFuzzyFallback(q, buildQuery, fuzzy);
 
     const hits = result.hits?.hits || [];
     const total = result.hits?.total?.value || 0;
@@ -273,30 +281,27 @@ app.get("/search/suggest", async (c) => {
       },
     ];
 
-    if (q.length >= 4) {
-      should.push({
-        multi_match: {
-          query: q,
-          fields: ["name^4", "description", "tags^2"],
-          fuzziness: q.length <= 6 ? 2 : "AUTO",
-          prefix_length: 0,
-          max_expansions: 20,
-        },
-      });
-    }
+    const fuzzy = {
+      multi_match: {
+        query: q,
+        fields: ["name^4", "description", "tags^2"],
+        fuzziness: "AUTO", // 1 edit for 3–5 chars, 2 for longer; a flat 2 matched e.g. "kettle" to "ketch"
+        prefix_length: 0,
+        max_expansions: 20,
+      },
+    };
 
-    const result = await esRequest("POST", `/${INDEX}/_search`, {
+    const result = await searchWithFuzzyFallback(q, (fuzzyClause) => ({
       size: 5,
-      ...(q.length >= 4 && !q.includes(" ") ? { min_score: 16 } : {}),
       query: {
         bool: {
           filter: [{ term: { is_active: true } }],
-          should,
+          should: fuzzyClause ? [...should, fuzzyClause] : should,
           minimum_should_match: 1,
         },
       },
       _source: ["id", "name", "price"],
-    });
+    }), fuzzy);
 
     const suggestions = (result.hits?.hits || []).map(
       (h: Record<string, unknown>) => h._source,
@@ -310,5 +315,6 @@ app.get("/search/suggest", async (c) => {
 });
 
 await createIndex();
-console.log("Search service running on http://localhost:8005");
-Deno.serve({ port: 8005 }, app.fetch);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8005);
+console.log(`Search service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);

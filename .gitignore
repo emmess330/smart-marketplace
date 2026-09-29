@@ -15,3 +15,5 @@ elasticsearch-data/
 *.pkl
 *.joblib
 ~$*.doc*
+# Deno test service logs
+backend/tests/.logs/

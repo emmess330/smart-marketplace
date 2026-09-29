@@ -3,10 +3,10 @@ import { z } from "zod";
 import { isUniqueViolation, query, withTransaction } from "../shared/db.ts";
 import { createSession } from "../shared/session.ts";
 import { createSellerProfile, StoreNameTakenError } from "../shared/sellers.ts";
-import { authMiddleware } from "../shared/middleware.ts";
+import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
-const app = new Hono();
+const app = new Hono<{ Variables: AuthVariables }>();
 app.use("*", corsConfig);
 const updateProfileSchema = z.object({
   full_name: z.string().min(2).optional(),
@@ -218,5 +218,6 @@ app.get("/users/sellers/:id", async (c) => {
   }
 });
 
-console.log("Users service running on http://localhost:8004");
-Deno.serve({ port: 8004 }, app.fetch);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8004);
+console.log(`Users service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);

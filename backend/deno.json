@@ -1,22 +1,17 @@
-
- 
-
-
-  {
+{
   "tasks": {
     "dev:auth": "deno run --allow-net --allow-env --allow-read --watch auth/main.ts",
     "dev:products": "deno run --allow-net --allow-env --allow-read --watch products/main.ts",
     "dev:orders": "deno run --allow-net --allow-env --allow-read --watch orders/main.ts",
-    "dev:users": "deno run --allow-net --allow-env --allow-read --watch users/main.ts"
+    "dev:users": "deno run --allow-net --allow-env --allow-read --watch users/main.ts",
+    "test": "deno test --allow-net --allow-env --allow-read --allow-write --allow-run --env-file=.env"
   },
   "imports": {
     "hono/": "https://deno.land/x/hono@v4.3.11/",
     "postgres": "https://deno.land/x/postgres@v0.19.3/mod.ts",
     "zod": "https://deno.land/x/zod@v3.22.4/mod.ts",
     "bcrypt": "https://deno.land/x/bcrypt@v0.4.1/mod.ts",
-    "djwt/": "https://deno.land/x/djwt@v3.0.2/"
+    "djwt/": "https://deno.land/x/djwt@v3.0.2/",
+    "@std/assert": "jsr:@std/assert@^1.0.0"
   }
 }
-
-
-

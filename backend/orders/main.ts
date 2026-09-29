@@ -1,15 +1,10 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query, type TxQuery, withTransaction } from "../shared/db.ts";
-import { authMiddleware } from "../shared/middleware.ts";
+import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
-type AppVariables = {
-  userId: string;
-  role: string;
-};
-
-const app = new Hono<{ Variables: AppVariables }>();
+const app = new Hono<{ Variables: AuthVariables }>();
 app.use("*", corsConfig);
 
 type StripePaymentIntent = {
@@ -943,5 +938,6 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 });
-console.log("Orders service running on http://localhost:8003");
-Deno.serve({ port: 8003 }, app.fetch);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8003);
+console.log(`Orders service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);

@@ -1,14 +1,14 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query } from "../shared/db.ts";
-import { authMiddleware } from "../shared/middleware.ts";
+import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
-const app = new Hono();
+const app = new Hono<{ Variables: AuthVariables }>();
 app.use("*", corsConfig);
 
 const ES_URL = Deno.env.get("ES_HOST") || "http://localhost:9200";
-const SEARCH_INDEX = "products";
+const SEARCH_INDEX = Deno.env.get("ES_INDEX") ?? "products";
 
 const productSchema = z.object({
   name: z.string().min(2),
@@ -396,5 +396,6 @@ app.get("/seller/products", authMiddleware, async (c) => {
   }
 });
 
-console.log("Products service running on http://localhost:8002");
-Deno.serve({ port: 8002 }, app.fetch);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8002);
+console.log(`Products service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);

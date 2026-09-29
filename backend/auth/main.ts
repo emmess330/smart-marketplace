@@ -167,5 +167,6 @@ app.get("/auth/me", async (c) => {
   }
 });
 
-console.log("Auth service running on http://localhost:8001");
-Deno.serve({ port: 8001 }, app.fetch);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8001);
+console.log(`Auth service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);
