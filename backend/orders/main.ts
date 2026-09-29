@@ -943,5 +943,6 @@ app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 });
-console.log("Orders service running on http://localhost:8003");
-Deno.serve({ port: 8003 }, app.fetch);
+const port = Number(Deno.env.get("PORT") ?? 8003);
+console.log(`Orders service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);

@@ -6,7 +6,7 @@ const app = new Hono();
 app.use("*", corsConfig);
 
 const ES_URL = Deno.env.get("ES_HOST") || "http://localhost:9200";
-const INDEX = "products";
+const INDEX = Deno.env.get("ES_INDEX") ?? "products";
 
 async function esRequest(method: string, path: string, body?: unknown) {
   const res = await fetch(`${ES_URL}${path}`, {
@@ -310,5 +310,6 @@ app.get("/search/suggest", async (c) => {
 });
 
 await createIndex();
-console.log("Search service running on http://localhost:8005");
-Deno.serve({ port: 8005 }, app.fetch);
+const port = Number(Deno.env.get("PORT") ?? 8005);
+console.log(`Search service running on http://localhost:${port}`);
+Deno.serve({ port }, app.fetch);
