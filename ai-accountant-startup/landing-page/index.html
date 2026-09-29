@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AccountantAI - Your Intelligent Accounting Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="nav-content">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="32" height="32" rx="8" fill="#4F46E5"/>
+                        <path d="M16 8L22 12V20L16 24L10 20V12L16 8Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M16 16V24M16 16L10 12M16 16L22 12" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>AccountantAI</span>
+                </div>
+                <div class="nav-links">
+                    <a href="#features">Features</a>
+                    <a href="#pricing">Pricing</a>
+                    <a href="#about">About</a>
+                    <button class="btn-secondary">Sign In</button>
+                    <button class="btn-primary">Start Free Trial</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-text">
+                    <div class="badge">🚀 Now in Beta - Join 500+ Early Users</div>
+                    <h1>Save 10+ Hours Every Week on Accounting Tasks</h1>
+                    <p class="hero-subtitle">
+                        AI-powered accounting assistant that automates bookkeeping, tax preparation, 
+                        and financial reporting. Built for accountants and small business owners.
+                    </p>
+                    <div class="hero-cta">
+                        <form class="email-capture" id="email-form">
+                            <input type="email" id="email-input" placeholder="Enter your work email" required>
+                            <button type="submit" class="btn-primary-large">Get Early Access</button>
+                        </form>
+                        <p class="cta-subtext">Free 14-day trial • No credit card required • Setup in 5 minutes</p>
+                    </div>
+                    <div class="social-proof">
+                        <div class="avatars">
+                            <img src="https://i.pravatar.cc/150?img=1" alt="User">
+                            <img src="https://i.pravatar.cc/150?img=2" alt="User">
+                            <img src="https://i.pravatar.cc/150?img=3" alt="User">
+                            <img src="https://i.pravatar.cc/150?img=4" alt="User">
+                            <img src="https://i.pravatar.cc/150?img=5" alt="User">
+                        </div>
+                        <div class="social-text">
+                            <div class="stars">★★★★★</div>
+                            <span>Loved by 500+ accountants • 4.9/5 rating</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="hero-image">
+                    <div class="dashboard-preview">
+                        <div class="preview-header">
+                            <div class="preview-dots">
+                                <span></span><span></span><span></span>
+                            </div>
+                            <div class="preview-title">Dashboard</div>
+                        </div>
+                        <div class="preview-content">
+                            <div class="metric-card">
+                                <div class="metric-label">Time Saved This Month</div>
+                                <div class="metric-value">24.5 hrs</div>
+                                <div class="metric-trend positive">↑ 18% from last month</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Transactions Processed</div>
+                                <div class="metric-value">1,247</div>
+                                <div class="metric-trend positive">↑ 95% accuracy</div>
+                            </div>
+                            <div class="chart-placeholder">
+                                <svg viewBox="0 0 300 150" class="chart">
+                                    <polyline points="10,140 50,120 90,80 130,90 170,60 210,70 250,30 290,40" 
+                                              fill="none" stroke="#4F46E5" stroke-width="3"/>
+                                    <polyline points="10,140 50,120 90,80 130,90 170,60 210,70 250,30 290,40 290,150 10,150" 
+                                              fill="url(#gradient)" opacity="0.2"/>
+                                    <defs>
+                                        <linearGradient id="gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                                            <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:1" />
+                                            <stop offset="100%" style="stop-color:#4F46E5;stop-opacity:0" />
+                                        </linearGradient>
+                                    </defs>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats Section -->
+    <section class="stats">
+        <div class="container">
+            <div class="stats-grid">
+                <div class="stat">
+                    <div class="stat-value">10+</div>
+                    <div class="stat-label">Hours Saved Per Week</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">95%</div>
+                    <div class="stat-label">Categorization Accuracy</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">$15K</div>
+                    <div class="stat-label">Avg. Tax Savings Identified</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">2 sec</div>
+                    <div class="stat-label">Report Generation Time</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <div class="section-header">
+                <h2>Everything You Need to Automate Accounting</h2>
+                <p>From receipt scanning to tax filing, we've got you covered</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">📸</div>
+                    <h3>Smart Receipt Scanning</h3>
+                    <p>Snap a photo, and our AI extracts vendor, amount, date, and category. Automatic categorization learns from your habits.</p>
+                    <ul class="feature-list">
+                        <li>99% OCR accuracy</li>
+                        <li>Bulk upload support</li>
+                        <li>Email forwarding</li>
+                        <li>Auto-duplicate detection</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🏦</div>
+                    <h3>Bank Reconciliation</h3>
+                    <p>Connect your bank accounts and let AI match transactions, flag anomalies, and generate reconciliation reports automatically.</p>
+                    <ul class="feature-list">
+                        <li>Real-time sync via Plaid</li>
+                        <li>Smart categorization</li>
+                        <li>Anomaly detection</li>
+                        <li>Multi-currency support</li>
+                    </ul>
+                </div>
+                <div class="feature-card featured">
+                    <div class="featured-badge">Most Popular</div>
+                    <div class="feature-icon">💬</div>
+                    <h3>AI Conversational Interface</h3>
+                    <p>Ask questions in plain English: "What's my cash position?" or "Show Q3 profit margin" and get instant answers with visual reports.</p>
+                    <ul class="feature-list">
+                        <li>Natural language queries</li>
+                        <li>Visual charts & graphs</li>
+                        <li>Export to Excel/PDF</li>
+                        <li>Voice commands</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Financial Reports</h3>
+                    <p>Generate P&L, balance sheets, cash flow statements, and custom reports in seconds. Schedule automatic delivery to clients.</p>
+                    <ul class="feature-list">
+                        <li>One-click generation</li>
+                        <li>Custom templates</li>
+                        <li>White-label branding</li>
+                        <li>Automated scheduling</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Tax Preparation</h3>
+                    <p>AI identifies deductions, calculates estimated taxes, and generates forms. Supports all entity types and 50 states.</p>
+                    <ul class="feature-list">
+                        <li>Deduction maximizer</li>
+                        <li>Form generation (1040, 1120, etc.)</li>
+                        <li>E-filing ready</li>
+                        <li>Tax planning scenarios</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔮</div>
+                    <h3>Cash Flow Forecasting</h3>
+                    <p>Predictive analytics for 30/60/90-day cash position. Get proactive alerts before you hit a cash crunch.</p>
+                    <ul class="feature-list">
+                        <li>AI-powered predictions</li>
+                        <li>Scenario modeling</li>
+                        <li>Seasonality detection</li>
+                        <li>Actionable insights</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="how-it-works">
+        <div class="container">
+            <div class="section-header">
+                <h2>Get Started in 3 Simple Steps</h2>
+                <p>From signup to automated accounting in under 5 minutes</p>
+            </div>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <h3>Connect Your Accounts</h3>
+                    <p>Link your bank accounts and accounting software. Our secure integration uses bank-level encryption.</p>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <h3>Import Your Data</h3>
+                    <p>Upload past transactions or start fresh. Our AI learns your categorization patterns in minutes.</p>
+                </div>
+                <div class="step-arrow">→</div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <h3>Let AI Do the Work</h3>
+                    <p>Sit back as we automatically categorize, reconcile, and generate reports. You just review and approve.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="pricing" class="pricing">
+        <div class="container">
+            <div class="section-header">
+                <h2>Simple, Transparent Pricing</h2>
+                <p>Start free, upgrade as you grow. No hidden fees.</p>
+            </div>
+            <div class="pricing-grid">
+                <div class="pricing-card">
+                    <div class="pricing-header">
+                        <h3>Starter</h3>
+                        <p>For freelancers and solo entrepreneurs</p>
+                    </div>
+                    <div class="pricing-price">
+                        <span class="currency">$</span>
+                        <span class="amount">0</span>
+                        <span class="period">/month</span>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>✓ 50 transactions/month</li>
+                        <li>✓ Receipt scanning</li>
+                        <li>✓ Basic reports</li>
+                        <li>✓ 1 bank account</li>
+                        <li>✓ Email support</li>
+                        <li class="disabled">✗ AI tax assistant</li>
+                        <li class="disabled">✗ Multi-client management</li>
+                        <li class="disabled">✗ API access</li>
+                    </ul>
+                    <button class="btn-outline">Start Free</button>
+                </div>
+                <div class="pricing-card popular">
+                    <div class="popular-badge">Most Popular</div>
+                    <div class="pricing-header">
+                        <h3>Professional</h3>
+                        <p>For accountants and small businesses</p>
+                    </div>
+                    <div class="pricing-price">
+                        <span class="currency">$</span>
+                        <span class="amount">49</span>
+                        <span class="period">/month</span>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>✓ Unlimited transactions</li>
+                        <li>✓ Advanced receipt scanning</li>
+                        <li>✓ All report types</li>
+                        <li>✓ Unlimited bank accounts</li>
+                        <li>✓ Priority support</li>
+                        <li>✓ AI tax assistant</li>
+                        <li>✓ Up to 5 clients</li>
+                        <li>✓ Cash flow forecasting</li>
+                    </ul>
+                    <button class="btn-primary">Start 14-Day Trial</button>
+                </div>
+                <div class="pricing-card">
+                    <div class="pricing-header">
+                        <h3>Firm</h3>
+                        <p>For accounting firms and teams</p>
+                    </div>
+                    <div class="pricing-price">
+                        <span class="currency">$</span>
+                        <span class="amount">99</span>
+                        <span class="period">/user/month</span>
+                    </div>
+                    <ul class="pricing-features">
+                        <li>✓ Everything in Professional</li>
+                        <li>✓ Unlimited clients</li>
+                        <li>✓ White-label reports</li>
+                        <li>✓ Team collaboration</li>
+                        <li>✓ API access</li>
+                        <li>✓ Dedicated account manager</li>
+                        <li>✓ Custom integrations</li>
+                        <li>✓ SOC 2 compliance</li>
+                    </ul>
+                    <button class="btn-outline">Contact Sales</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Testimonials -->
+    <section class="testimonials">
+        <div class="container">
+            <div class="section-header">
+                <h2>Loved by Accountants Everywhere</h2>
+                <p>See what our users are saying</p>
+            </div>
+            <div class="testimonials-grid">
+                <div class="testimonial-card">
+                    <div class="testimonial-stars">★★★★★</div>
+                    <p class="testimonial-text">
+                        "AccountantAI has transformed how I work. I'm saving 15 hours a week on data entry alone. 
+                        The AI categorization is scary accurate."
+                    </p>
+                    <div class="testimonial-author">
+                        <img src="https://i.pravatar.cc/150?img=12" alt="Sarah Chen">
+                        <div>
+                            <div class="author-name">Sarah Chen, CPA</div>
+                            <div class="author-title">Founder, Chen & Associates</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="testimonial-card">
+                    <div class="testimonial-stars">★★★★★</div>
+                    <p class="testimonial-text">
+                        "The conversational AI is a game-changer. I can ask complex questions in plain English 
+                        and get instant answers. My clients are impressed."
+                    </p>
+                    <div class="testimonial-author">
+                        <img src="https://i.pravatar.cc/150?img=33" alt="Michael Rodriguez">
+                        <div>
+                            <div class="author-name">Michael Rodriguez</div>
+                            <div class="author-title">Senior Accountant, TechCorp</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="testimonial-card">
+                    <div class="testimonial-stars">★★★★★</div>
+                    <p class="testimonial-text">
+                        "As a small business owner with no accounting background, this tool is a lifesaver. 
+                        It's like having a CPA in my pocket."
+                    </p>
+                    <div class="testimonial-author">
+                        <img src="https://i.pravatar.cc/150?img=27" alt="Jessica Thompson">
+                        <div>
+                            <div class="author-name">Jessica Thompson</div>
+                            <div class="author-title">Owner, Thompson Consulting</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <div class="container">
+            <div class="cta-content">
+                <h2>Ready to Save 10+ Hours Per Week?</h2>
+                <p>Join 500+ accountants and business owners using AI to automate their accounting</p>
+                <form class="email-capture-large" id="email-form-footer">
+                    <input type="email" placeholder="Enter your work email" required>
+                    <button type="submit" class="btn-primary-large">Start Free Trial</button>
+                </form>
+                <p class="cta-subtext">14-day free trial • No credit card required • Cancel anytime</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-column">
+                    <div class="footer-logo">
+                        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="32" height="32" rx="8" fill="#4F46E5"/>
+                            <path d="M16 8L22 12V20L16 24L10 20V12L16 8Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M16 16V24M16 16L10 12M16 16L22 12" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>AccountantAI</span>
+                    </div>
+                    <p>AI-powered accounting automation for accountants and small businesses.</p>
+                    <div class="footer-social">
+                        <a href="#">Twitter</a>
+                        <a href="#">LinkedIn</a>
+                        <a href="#">GitHub</a>
+                    </div>
+                </div>
+                <div class="footer-column">
+                    <h4>Product</h4>
+                    <a href="#features">Features</a>
+                    <a href="#pricing">Pricing</a>
+                    <a href="#">Integrations</a>
+                    <a href="#">API Docs</a>
+                    <a href="#">Changelog</a>
+                </div>
+                <div class="footer-column">
+                    <h4>Resources</h4>
+                    <a href="#">Blog</a>
+                    <a href="#">Case Studies</a>
+                    <a href="#">Help Center</a>
+                    <a href="#">Webinars</a>
+                    <a href="#">Templates</a>
+                </div>
+                <div class="footer-column">
+                    <h4>Company</h4>
+                    <a href="#">About Us</a>
+                    <a href="#">Careers</a>
+                    <a href="#">Contact</a>
+                    <a href="#">Privacy</a>
+                    <a href="#">Terms</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 AccountantAI. All rights reserved.</p>
+                <p>SOC 2 Type II Certified • GDPR Compliant • 256-bit Encryption</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
