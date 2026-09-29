@@ -1,4 +1,4 @@
-import { Pool } from "postgres";
+import { Pool, PostgresError } from "postgres";
 
 const pool = new Pool({
   hostname: Deno.env.get("DB_HOST") || "localhost",
@@ -37,6 +37,12 @@ export async function withTransaction<T>(fn: (tx: TxQuery) => Promise<T>): Promi
   } finally {
     client.release();
   }
+}
+
+// True for a UNIQUE violation, optionally only on the named constraint.
+export function isUniqueViolation(err: unknown, constraint?: string) {
+  return err instanceof PostgresError && err.fields.code === "23505" &&
+    (!constraint || err.fields.constraint === constraint);
 }
 
 export default pool;

@@ -1,6 +1,8 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
-import { query } from "../shared/db.ts";
+import { isUniqueViolation, query, withTransaction } from "../shared/db.ts";
+import { createSession } from "../shared/session.ts";
+import { createSellerProfile, StoreNameTakenError } from "../shared/sellers.ts";
 import { authMiddleware } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
@@ -96,6 +98,8 @@ app.put("/users/me", authMiddleware, async (c) => {
   }
 });
 
+class SellerExistsError extends Error {}
+
 // POST /users/seller — create seller profile for existing user
 app.post("/users/seller", authMiddleware, async (c) => {
   try {
@@ -103,39 +107,45 @@ app.post("/users/seller", authMiddleware, async (c) => {
     const body = await c.req.json();
     const data = sellerProfileSchema.parse(body);
 
-    // Check already a seller
-    const existing = await query(
-      "SELECT id FROM sellers WHERE user_id = $1",
-      [userId]
-    );
-    if (existing.rows.length > 0) {
-      return c.json({ error: "Seller profile already exists" }, 409);
-    }
+    const { seller, accessToken, refreshToken } = await withTransaction(
+      async (tx) => {
+        const existing = await tx(
+          "SELECT id FROM sellers WHERE user_id = $1",
+          [userId],
+        );
+        if (existing.rows.length > 0) {
+          throw new SellerExistsError();
+        }
 
-    // Check store name not taken
-    const nameCheck = await query(
-      "SELECT id FROM sellers WHERE store_name = $1",
-      [data.store_name]
-    );
-    if (nameCheck.rows.length > 0) {
-      return c.json({ error: "Store name already taken" }, 409);
-    }
+        const seller = await createSellerProfile(
+          tx,
+          userId,
+          data.store_name,
+          data.store_description || null,
+        );
 
-    // Update user role to seller
-    await query("UPDATE users SET role = 'seller' WHERE id = $1", [userId]);
-
-    // Create seller record
-    const result = await query(
-      `INSERT INTO sellers (user_id, store_name, store_description)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [userId, data.store_name, data.store_description || null]
+        // The caller's current token still says "buyer"; issue a fresh pair
+        // so seller-only endpoints work without logging in again.
+        const tokens = await createSession(userId, "seller", tx);
+        return { seller, ...tokens };
+      },
     );
 
-    return c.json({ seller: result.rows[0] }, 201);
+    return c.json({ seller, accessToken, refreshToken }, 201);
   } catch (err) {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
+    }
+    if (err instanceof StoreNameTakenError) {
+      return c.json({ error: err.message }, 409);
+    }
+    // SellerExistsError, or a concurrent request winning the
+    // sellers_user_id_unique race.
+    if (
+      err instanceof SellerExistsError ||
+      isUniqueViolation(err, "sellers_user_id_unique")
+    ) {
+      return c.json({ error: "Seller profile already exists" }, 409);
     }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
@@ -173,6 +183,9 @@ app.put("/users/seller", authMiddleware, async (c) => {
   } catch (err) {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
+    }
+    if (isUniqueViolation(err, "sellers_store_name_key")) {
+      return c.json({ error: "Store name already taken" }, 409);
     }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);

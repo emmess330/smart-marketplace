@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
-import { usersApi } from "@/lib/api";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -23,22 +22,9 @@ export default function RegisterPage() {
   setLoading(true);
   setError("");
   try {
+    // Registering as a seller also creates the store server-side.
     const res = await authApi.register(form);
     setUser(res.data.user);
-    
-    // If user registered as seller, create seller profile
-    if (form.role === "seller") {
-      try {
-        await usersApi.createSellerProfile({
-          store_name: `${form.full_name}'s Store`,
-          store_description: "Welcome to my store"
-        });
-      } catch (sellerErr) {
-        console.error("Failed to create seller profile", sellerErr);
-        // Optionally show a warning but still redirect
-      }
-    }
-    
     router.push("/products");
   } catch (err: unknown) {
     const error = err as { response?: { data?: { error?: string } } };

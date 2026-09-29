@@ -110,8 +110,13 @@ export const usersApi = {
   updateProfile: (data: object) =>
     axios.put(`${USERS_URL}/users/me`, data, { headers: authHeaders() }),
 
-  createSellerProfile: (data: object) =>
-    axios.post(`${USERS_URL}/users/seller`, data, { headers: authHeaders() }),
+  // Becoming a seller returns a fresh token pair carrying the seller role.
+  createSellerProfile: async (data: object) => {
+    const res = await axios.post(`${USERS_URL}/users/seller`, data, { headers: authHeaders() });
+    Cookies.set("access_token", res.data.accessToken, { expires: 1 });
+    Cookies.set("refresh_token", res.data.refreshToken, { expires: 7 });
+    return res;
+  },
 
   getSeller: (id: string) =>
     axios.get(`${USERS_URL}/users/sellers/${id}`),

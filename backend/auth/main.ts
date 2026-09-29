@@ -1,8 +1,10 @@
 import { Hono } from "hono/mod.ts";
 import { hash, compare } from "bcrypt";
 import { z } from "zod";
-import { query } from "../shared/db.ts";
-import { generateTokens, verifyToken } from "../shared/jwt.ts";
+import { isUniqueViolation, query, withTransaction } from "../shared/db.ts";
+import { verifyToken } from "../shared/jwt.ts";
+import { createSession } from "../shared/session.ts";
+import { createSellerProfile, StoreNameTakenError } from "../shared/sellers.ts";
 import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
@@ -13,6 +15,8 @@ const registerSchema = z.object({
   password: z.string().min(8),
   full_name: z.string().min(2),
   role: z.enum(["buyer", "seller"]).default("buyer"),
+  // Sellers only; defaults to "<full_name>'s Store".
+  store_name: z.string().min(2).optional(),
 });
 
 const loginSchema = z.object({
@@ -35,27 +39,40 @@ app.post("/auth/register", async (c) => {
 
     const passwordHash = await hash(data.password);
 
-    const result = await query(
-      `INSERT INTO users (email, password_hash, full_name, role)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, email, full_name, role, created_at`,
-      [data.email, passwordHash, data.full_name, data.role]
-    );
+    // The user, their store (for sellers) and their session are created
+    // together, so a seller can never end up without a store.
+    const { user, seller, accessToken, refreshToken } = await withTransaction(
+      async (tx) => {
+        const result = await tx(
+          `INSERT INTO users (email, password_hash, full_name, role)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, email, full_name, role, created_at`,
+          [data.email, passwordHash, data.full_name, data.role],
+        );
+        const user = result.rows[0] as Record<string, unknown>;
 
-    const user = result.rows[0] as Record<string, unknown>;
-    const { accessToken, refreshToken } = await generateTokens(
-      user.id as string,
-      user.role as string
-    );
+        const seller = data.role === "seller"
+          ? await createSellerProfile(
+            tx,
+            user.id as string,
+            data.store_name ?? `${data.full_name}'s Store`,
+            null,
+            data.store_name === undefined,
+          )
+          : null;
 
-    await query(
-      `INSERT INTO sessions (user_id, refresh_token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-      [user.id, refreshToken]
+        const tokens = await createSession(
+          user.id as string,
+          user.role as string,
+          tx,
+        );
+        return { user, seller, ...tokens };
+      },
     );
 
     return c.json({
       user: { id: user.id, email: user.email, full_name: user.full_name, role: user.role },
+      seller,
       accessToken,
       refreshToken,
     }, 201);
@@ -63,6 +80,13 @@ app.post("/auth/register", async (c) => {
   } catch (err) {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
+    }
+    if (err instanceof StoreNameTakenError) {
+      return c.json({ error: err.message }, 409);
+    }
+    // Two registrations racing past the email check above.
+    if (isUniqueViolation(err, "users_email_key")) {
+      return c.json({ error: "Email already registered" }, 409);
     }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
@@ -90,15 +114,9 @@ app.post("/auth/login", async (c) => {
       return c.json({ error: "Invalid credentials" }, 401);
     }
 
-    const { accessToken, refreshToken } = await generateTokens(
+    const { accessToken, refreshToken } = await createSession(
       user.id as string,
-      user.role as string
-    );
-
-    await query(
-      `INSERT INTO sessions (user_id, refresh_token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-      [user.id, refreshToken]
+      user.role as string,
     );
 
     return c.json({
