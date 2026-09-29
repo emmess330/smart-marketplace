@@ -33,7 +33,11 @@ Deno.test({ name: "ML services", ignore: !hasMl, ...suiteOptions }, async (t) =>
     const other = await fx.user("other");
 
     await t.step("recommender: popular and similar products are public", async () => {
-      assertEquals((await api("GET", `${REC}/recommend/popular`)).status, 200);
+      // The recommender turns database errors into an empty list, so require
+      // actual products: a bare 200 once hid a broken DB driver in CI.
+      const popular = await api("GET", `${REC}/recommend/popular`);
+      assertEquals(popular.status, 200);
+      assert(popular.body.recommendations.length > 0, "popular returned no products");
       assertEquals((await api("GET", `${REC}/recommend/similar/${crypto.randomUUID()}`)).status, 200);
     });
 
@@ -82,7 +86,7 @@ Deno.test({ name: "ML services", ignore: !hasMl, ...suiteOptions }, async (t) =>
           assert(statuses.includes(200) && statuses.includes(409), `statuses: ${statuses}`);
         } finally {
           if (backup) Deno.writeFileSync(MODEL_PATH, backup);
-          else Deno.removeSync(MODEL_PATH);
+          else if (mtime(MODEL_PATH) !== undefined) Deno.removeSync(MODEL_PATH);
         }
       },
     });

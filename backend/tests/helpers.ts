@@ -12,7 +12,8 @@ const BACKEND_DIR = new URL("../", import.meta.url).pathname;
 const REPO_ROOT = new URL("../../", import.meta.url).pathname;
 const LOG_DIR = `${BACKEND_DIR}tests/.logs/`;
 export const ML_DIR = `${REPO_ROOT}ml/`;
-const ML_PYTHON = `${ML_DIR}.venv/bin/python`;
+// Override with ML_PYTHON to test against a different environment.
+const ML_PYTHON = Deno.env.get("ML_PYTHON") ?? `${ML_DIR}.venv/bin/python`;
 
 export type ServiceName =
   | "auth"

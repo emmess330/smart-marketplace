@@ -40,11 +40,21 @@ def _normalize_db_url(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def with_psycopg2_driver(url: str) -> str:
+    """Name the psycopg2 driver explicitly. SQLAlchemy 2.1 made plain
+    postgresql:// URLs use psycopg (v3), which isn't installed; only
+    psycopg2-binary is (see requirements.txt)."""
+    for scheme in ("postgresql://", "postgres://"):
+        if url.startswith(scheme):
+            return "postgresql+psycopg2://" + url[len(scheme):]
+    return url
+
+
 def get_db_url() -> str:
     url = (os.getenv("DB_URL") or os.getenv("DATABASE_URL") or "").strip()
     if not url:
         url = "postgresql://marketplace_user:marketplace_pass@127.0.0.1:5432/marketplace"
-    return _normalize_db_url(url)
+    return with_psycopg2_driver(_normalize_db_url(url))
 
 
 def get_jwt_secret() -> str:
