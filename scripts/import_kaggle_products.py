@@ -26,7 +26,12 @@ def _load_db_url() -> str:
 
 
 DB_URL = _load_db_url()
-engine = create_engine(DB_URL)
+# Name the psycopg2 driver: SQLAlchemy 2.1 made plain postgresql:// URLs use
+# psycopg (v3), which isn't installed (same fix as ml/db_config.py).
+engine = create_engine(
+    DB_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if DB_URL.startswith("postgresql://") else DB_URL
+)
 
 # Demo seller created only when `sellers` is empty. Password is generated fresh
 # per run (never committed to source) and printed once — save it, it isn't

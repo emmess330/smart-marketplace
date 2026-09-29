@@ -318,6 +318,7 @@ The Stripe checkout and refund tests run in CI only if you add a repository secr
 - Restrict **CORS** in `backend/shared/cors.ts` (currently permissive for development).
 - Do not commit real **Stripe** or **JWT** secrets.
 - Use HTTPS and a reverse proxy or API gateway in production instead of exposing many ports.
+- **Rate limiting** (login, registration, token refresh) is counted in the auth service's memory, keyed on the TCP peer address. That's correct for a single auth instance with clients connecting directly. Behind a reverse proxy every request would appear to come from the proxy's IP, so read the client IP from the proxy's trusted header instead; with several auth instances, move the counters to a shared store such as Redis. Limits are tunable via the `RATE_LIMIT_*` variables in `.env.example`.
 
 ## 11. Repository layout (implementation)
 

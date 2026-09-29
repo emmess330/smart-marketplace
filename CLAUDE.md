@@ -31,7 +31,7 @@ Data model (`database/migrations/001_init.sql`): `users` → `sellers` (1:1 exte
 
 **ML services** load `DB_URL` via `ml/db_config.py`, which reads `backend/.env` (not a `ml/.env`) and normalizes `localhost` → `127.0.0.1` to avoid IPv6 resolution surprises. Models are trained offline (`train.py` in each service dir) and served from pickled files (`model.pkl`, `forecast_*.pkl`) loaded at API startup — there's no online/incremental training. Retrain and restart the API to pick up new data.
 
-**Auth**: JWT access tokens (1h) + refresh tokens (7d), both HMAC-signed with `JWT_SECRET`. Stored in the frontend as cookies (`access_token`, `refresh_token`) via `js-cookie`, attached as `Authorization: Bearer` headers by `frontend/lib/api.ts`. There is no token-refresh interceptor currently — expired access tokens will 401 rather than silently refresh.
+**Auth**: JWT access tokens (1h) + refresh tokens (7d), both HMAC-signed with `JWT_SECRET`. Stored in the frontend as cookies (`access_token`, `refresh_token`) via `js-cookie`, attached as `Authorization: Bearer` headers by `frontend/lib/api.ts`. Tokens carry a `token_type` claim (`access`/`refresh`); `verifyToken()` rejects the wrong type. `POST /auth/refresh` rotates refresh tokens (each works once; the `sessions` row is consumed) and re-reads the user's role from the DB. A global axios response interceptor in `api.ts` retries any 401 on a request that sent a token after one shared (single-flight) refresh, and logs the user out if the refresh fails — so new API calls must go through the global `axios` with `authHeaders()` to get this for free.
 
 **Frontend state**: global client state (auth user, cart item count) lives in small Zustand stores (`frontend/lib/store.ts`), not React context. Server data fetching goes through the typed API clients in `frontend/lib/api.ts` (`authApi`, `productsApi`, `ordersApi`, `usersApi`, `searchApi`, `recommendApi`, `analyticsApi`, `forecastApi`) — add new backend calls there rather than calling `axios` directly from components.
 
@@ -105,6 +105,7 @@ Reads `DB_URL` from `backend/.env`, attaches products to the first seller in the
 
 ## Known rough edges worth knowing before you touch related code
 
+- Auth rate limits (`backend/shared/rateLimit.ts`) are in-memory and keyed on the socket IP (X-Forwarded-For is deliberately ignored — there's no trusted proxy). The test harness sets `RATE_LIMIT_*` very high for every service it starts; `tests/rate_limit_test.ts` overrides them to test the limits themselves.
 - CORS is wide open (`origin: "*"`) across every backend and ML service — this is dev-only and called out as such in `README-IMPLEMENTATION.md` §9; don't tighten it without checking if that's actually in scope.
 - Automated tests cover the backend and ML HTTP APIs only (`backend/tests/`); the frontend has none. `docs/test-plan.md` is the original manual test plan (report material), not the executable suite.
 - `.env.example` at the repo root contains real-looking Stripe **test**-mode keys committed to the repo; these are sandbox keys, not production secrets, but treat any request to add real secrets to tracked files as something to flag.

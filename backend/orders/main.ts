@@ -2,6 +2,7 @@ import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query, type TxQuery, withTransaction } from "../shared/db.ts";
 import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
+import { parseJsonBody, uuidParams } from "../shared/validation.ts";
 import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono<{ Variables: AuthVariables }>();
@@ -215,6 +216,10 @@ const addToCartSchema = z.object({
   quantity: z.number().int().positive(),
 });
 
+const updateCartSchema = z.object({
+  quantity: z.number().int().positive(),
+});
+
 const shippingAddressSchema = z.object({
   full_name: z.string().trim().min(2).max(255),
   line1: z.string().trim().min(1).max(255),
@@ -382,8 +387,7 @@ app.get("/cart", authMiddleware, async (c) => {
 app.post("/cart", authMiddleware, async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const data = addToCartSchema.parse(body);
+    const data = await parseJsonBody(c, addToCartSchema);
 
     // Check product exists and has stock
     const productResult = await query(
@@ -428,15 +432,11 @@ app.post("/cart", authMiddleware, async (c) => {
 });
 
 // PUT /cart/:id — update quantity
-app.put("/cart/:id", authMiddleware, async (c) => {
+app.put("/cart/:id", authMiddleware, uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
     const userId = c.get("userId");
-    const { quantity } = await c.req.json();
-
-    if (!quantity || quantity < 1) {
-      return c.json({ error: "Quantity must be at least 1" }, 400);
-    }
+    const { quantity } = await parseJsonBody(c, updateCartSchema);
 
     const cartItemResult = await query(
       `SELECT ci.id, p.name, p.stock_quantity
@@ -467,13 +467,16 @@ app.put("/cart/:id", authMiddleware, async (c) => {
 
     return c.json({ cart_item: result.rows[0] });
   } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Quantity must be a positive whole number", details: err.errors }, 400);
+    }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
 // DELETE /cart/:id — remove item from cart
-app.delete("/cart/:id", authMiddleware, async (c) => {
+app.delete("/cart/:id", authMiddleware, uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
     const userId = c.get("userId");
@@ -512,8 +515,7 @@ app.delete("/cart", authMiddleware, async (c) => {
 app.post("/orders/checkout", authMiddleware, async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const data = checkoutSchema.parse(body);
+    const data = await parseJsonBody(c, checkoutSchema);
 
     // Verify the payment itself first. Cart and stock checks happen inside
     // the transaction below, where a mismatch triggers a refund — checking
@@ -711,7 +713,7 @@ app.get("/orders", authMiddleware, async (c) => {
 });
 
 // GET /orders/:id — single order detail
-app.get("/orders/:id", authMiddleware, async (c) => {
+app.get("/orders/:id", authMiddleware, uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
     const userId = c.get("userId");
@@ -857,9 +859,7 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
 app.post("/orders/create-payment-intent", authMiddleware, async (c) => {
   try {
     const userId = String(c.get("userId"));
-    const { shipping_address } = createPaymentIntentSchema.parse(
-      await c.req.json(),
-    );
+    const { shipping_address } = await parseJsonBody(c, createPaymentIntentSchema);
     const cartItems = await getCheckoutCartItems(userId);
 
     if (cartItems.length === 0) {

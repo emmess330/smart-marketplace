@@ -4,6 +4,7 @@ import { isUniqueViolation, query, withTransaction } from "../shared/db.ts";
 import { createSession } from "../shared/session.ts";
 import { createSellerProfile, StoreNameTakenError } from "../shared/sellers.ts";
 import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
+import { parseJsonBody, uuidParams } from "../shared/validation.ts";
 import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono<{ Variables: AuthVariables }>();
@@ -57,8 +58,7 @@ app.get("/users/me", authMiddleware, async (c) => {
 app.put("/users/me", authMiddleware, async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const data = updateProfileSchema.parse(body);
+    const data = await parseJsonBody(c, updateProfileSchema);
 
     const fields: string[] = [];
     const params: unknown[] = [];
@@ -104,8 +104,7 @@ class SellerExistsError extends Error {}
 app.post("/users/seller", authMiddleware, async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const data = sellerProfileSchema.parse(body);
+    const data = await parseJsonBody(c, sellerProfileSchema);
 
     const { seller, accessToken, refreshToken } = await withTransaction(
       async (tx) => {
@@ -156,8 +155,7 @@ app.post("/users/seller", authMiddleware, async (c) => {
 app.put("/users/seller", authMiddleware, async (c) => {
   try {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    const data = sellerProfileSchema.partial().parse(body);
+    const data = await parseJsonBody(c, sellerProfileSchema.partial());
 
     const fields: string[] = [];
     const params: unknown[] = [];
@@ -193,7 +191,7 @@ app.put("/users/seller", authMiddleware, async (c) => {
 });
 
 // GET /users/sellers/:id — public seller profile
-app.get("/users/sellers/:id", async (c) => {
+app.get("/users/sellers/:id", uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
 

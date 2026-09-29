@@ -1,6 +1,8 @@
 import { Hono } from "hono/mod.ts";
 import { corsConfig } from "../shared/cors.ts";
 import { query } from "../shared/db.ts";
+import { paginationSchema } from "../shared/validation.ts";
+import { z } from "zod";
 
 const app = new Hono();
 app.use("*", corsConfig);
@@ -157,15 +159,33 @@ async function searchWithFuzzyFallback(
   return await esRequest("POST", `/${INDEX}/_search`, build(fuzzyClause));
 }
 
+// Elasticsearch's default index.max_result_window: from + size beyond this fails.
+const MAX_RESULT_WINDOW = 10_000;
+
+const searchQuerySchema = paginationSchema(12)
+  .extend({
+    q: z.string().trim().default(""),
+    category: z.string().default(""),
+    min_price: z.coerce.number().min(0).default(0),
+    max_price: z.coerce.number().min(0).default(999999),
+  })
+  .refine((d) => d.min_price <= d.max_price, {
+    message: "min_price must not exceed max_price",
+    path: ["min_price"],
+  })
+  .refine((d) => d.page * d.limit <= MAX_RESULT_WINDOW, {
+    message: `Only the first ${MAX_RESULT_WINDOW} results can be paged through`,
+    path: ["page"],
+  });
+
 // GET /search?q=&category=&min_price=&max_price=&page=&limit=
 app.get("/search", async (c) => {
   try {
-    const q = (c.req.query("q") || "").trim();
-    const category = c.req.query("category") || "";
-    const minPrice = Number(c.req.query("min_price") || 0);
-    const maxPrice = Number(c.req.query("max_price") || 999999);
-    const page = Number(c.req.query("page") || 1);
-    const limit = Number(c.req.query("limit") || 12);
+    const parsed = searchQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "Invalid query", details: parsed.error.errors }, 400);
+    }
+    const { q, category, page, limit, min_price: minPrice, max_price: maxPrice } = parsed.data;
     const from = (page - 1) * limit;
 
     const filter: unknown[] = [
