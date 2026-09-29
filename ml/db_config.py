@@ -43,7 +43,7 @@ def _normalize_db_url(url: str) -> str:
 def with_psycopg2_driver(url: str) -> str:
     """Name the psycopg2 driver explicitly. SQLAlchemy 2.1 made plain
     postgresql:// URLs use psycopg (v3), which isn't installed; only
-    psycopg2-binary is (see requirements.txt)."""
+    psycopg2-binary is (see requirements.txt / requirements.lock)."""
     for scheme in ("postgresql://", "postgres://"):
         if url.startswith(scheme):
             return "postgresql+psycopg2://" + url[len(scheme):]

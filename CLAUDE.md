@@ -75,8 +75,9 @@ No test suite is configured. Note `frontend/AGENTS.md` / `frontend/CLAUDE.md` wa
 Run from `ml/`, with a venv active:
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock   # exact pins; requirements.txt holds the loose direct deps
 ```
+To add or upgrade a package: edit `requirements.txt`, regenerate `requirements.lock` in a fresh Python 3.12 venv (steps in the lock's header; keep the `uvloop` platform marker), run `deno task test`, commit both.
 Then per service (each needs its own terminal, from that service's directory):
 ```bash
 cd ml/recommender && python api.py    # port 8006
