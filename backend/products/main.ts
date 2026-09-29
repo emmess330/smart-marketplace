@@ -1,6 +1,7 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { isForeignKeyViolation, query } from "../shared/db.ts";
+import { imageUrls } from "../shared/productImages.ts";
 import { optionalUuid, paginationSchema, parseJsonBody, uuidParams } from "../shared/validation.ts";
 import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
@@ -55,7 +56,7 @@ function normalizeArray(value: unknown): unknown[] {
 async function getSearchDocument(productId: string) {
   const result = await query(
     `SELECT p.id, p.name, p.description, p.price, p.stock_quantity,
-            p.tags, p.is_active, p.created_at, p.seller_id,
+            p.tags, p.images, p.is_active, p.created_at, p.seller_id,
             s.store_name, c.name as category_name
      FROM products p
      LEFT JOIN sellers s ON p.seller_id = s.id
@@ -77,6 +78,7 @@ async function getSearchDocument(productId: string) {
     store_name: product.store_name || "",
     seller_id: product.seller_id,
     tags: normalizeArray(product.tags),
+    images: imageUrls(product.images),
     is_active: product.is_active,
     created_at: product.created_at,
   };

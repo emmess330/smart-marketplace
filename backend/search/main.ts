@@ -2,6 +2,7 @@ import { Hono } from "hono/mod.ts";
 import { corsConfig } from "../shared/cors.ts";
 import { query } from "../shared/db.ts";
 import { paginationSchema } from "../shared/validation.ts";
+import { imageUrls } from "../shared/productImages.ts";
 import { z } from "zod";
 
 const app = new Hono();
@@ -46,6 +47,8 @@ async function createIndex() {
             store_name: { type: "keyword" },
             seller_id: { type: "keyword" },
             tags: { type: "keyword" },
+            // Returned with results for display; never searched.
+            images: { type: "keyword", index: false },
             is_active: { type: "boolean" },
             created_at: { type: "date" },
           },
@@ -90,7 +93,7 @@ app.post("/search/index", async (c) => {
   try {
     const result = await query(
       `SELECT p.id, p.name, p.description, p.price, p.stock_quantity,
-              p.tags, p.is_active, p.created_at, p.seller_id,
+              p.tags, p.images, p.is_active, p.created_at, p.seller_id,
               s.store_name, c.name as category_name
        FROM products p
        LEFT JOIN sellers s ON p.seller_id = s.id
@@ -122,6 +125,7 @@ app.post("/search/index", async (c) => {
           store_name: product.store_name || "",
           seller_id: product.seller_id,
           tags: product.tags || [],
+          images: imageUrls(product.images),
           is_active: product.is_active,
           created_at: product.created_at,
         },
