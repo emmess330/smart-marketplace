@@ -1,6 +1,13 @@
 import { Context, Next } from "hono/mod.ts";
 import { verifyToken } from "./jwt.ts";
 
+// Context variables set by authMiddleware. Type the app with
+// `new Hono<{ Variables: AuthVariables }>()` so c.get("userId") is typed.
+export type AuthVariables = {
+  userId: string;
+  role: string;
+};
+
 export async function authMiddleware(c: Context, next: Next) {
   const authHeader = c.req.header("Authorization");
 

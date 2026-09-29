@@ -1,15 +1,10 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query, type TxQuery, withTransaction } from "../shared/db.ts";
-import { authMiddleware } from "../shared/middleware.ts";
+import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
-type AppVariables = {
-  userId: string;
-  role: string;
-};
-
-const app = new Hono<{ Variables: AppVariables }>();
+const app = new Hono<{ Variables: AuthVariables }>();
 app.use("*", corsConfig);
 
 type StripePaymentIntent = {

@@ -1,10 +1,10 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
 import { query } from "../shared/db.ts";
-import { authMiddleware } from "../shared/middleware.ts";
+import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
-const app = new Hono();
+const app = new Hono<{ Variables: AuthVariables }>();
 app.use("*", corsConfig);
 
 const ES_URL = Deno.env.get("ES_HOST") || "http://localhost:9200";
