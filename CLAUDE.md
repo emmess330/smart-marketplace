@@ -59,7 +59,7 @@ deno task dev:users
 ```
 Or all at once: `./backend/start-all.sh` (macOS: opens Terminal windows per service; Linux: backgrounds them, logs to `/tmp`).
 
-No test suite or linter is configured for the backend.
+Tests: `deno task test` (from `backend/`) runs the integration suite in `backend/tests/`. It spawns the services it needs on test ports 18001–18007 (via the `PORT` env var every service honours) and uses a throwaway Elasticsearch index (`ES_INDEX`), so dev servers can stay up. Fixtures are tagged per run and deleted afterwards — follow the `Fixtures` helper in `tests/helpers.ts` rather than touching existing rows. Stripe/ML/Elasticsearch steps skip when those aren't available. No linter is configured for the backend.
 
 ### Frontend
 Run from `frontend/`:
@@ -82,7 +82,7 @@ Then per service (each needs its own terminal, from that service's directory):
 cd ml/recommender && python api.py    # port 8006
 cd ml/forecasting && python api.py    # port 8007
 ```
-Retrain models with `python train.py` in the respective directory before starting the API if `model.pkl`/`forecast_*.pkl` are missing or stale. No automated test suite.
+Retrain models with `python train.py` in the respective directory before starting the API if `model.pkl`/`forecast_*.pkl` are missing or stale. The ML HTTP APIs are covered by `backend/tests/ml_test.ts`; there are no Python unit tests.
 
 ### Database
 ```bash
@@ -106,5 +106,5 @@ Reads `DB_URL` from `backend/.env`, attaches products to the first seller in the
 ## Known rough edges worth knowing before you touch related code
 
 - CORS is wide open (`origin: "*"`) across every backend and ML service — this is dev-only and called out as such in `README-IMPLEMENTATION.md` §9; don't tighten it without checking if that's actually in scope.
-- No automated tests exist anywhere in the repo (backend, frontend, or ML) — `docs/test-plan.md` documents an intended manual test plan, not an executable one.
+- Automated tests cover the backend and ML HTTP APIs only (`backend/tests/`); the frontend has none. `docs/test-plan.md` is the original manual test plan (report material), not the executable suite.
 - `.env.example` at the repo root contains real-looking Stripe **test**-mode keys committed to the repo; these are sandbox keys, not production secrets, but treat any request to add real secrets to tracked files as something to flag.

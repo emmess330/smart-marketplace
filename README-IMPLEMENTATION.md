@@ -284,18 +284,39 @@ python import_kaggle_products.py
 
 Use a Python environment that has **`pandas`** and **`sqlalchemy`** (e.g. activate `ml/.venv` first).
 
-## 9. Production notes
+## 9. Automated tests
+
+Integration tests for the backend and ML services live in **`backend/tests/`** (Deno's built-in test runner). They start each service themselves on **test ports 18001–18007**, so you can leave your dev servers running on 8001–8007.
+
+```bash
+cd backend
+deno task test
+```
+
+Requirements: Postgres running with migrations applied (including `004`), and `backend/.env` configured. Tests create their own tagged users, sellers, products and orders (`test-<run>-…@example.test`) and delete them afterwards; they never modify existing rows. Parts that need optional pieces are skipped when those are missing:
+
+| Tests | Run when |
+|---|---|
+| Stripe checkout and refund flows | `STRIPE_SECRET_KEY` is a **test-mode** key (`sk_test_…`) |
+| Recommender and forecasting | `ml/.venv` exists |
+| Search indexing and sync | Elasticsearch is reachable; tests use a throwaway `products_test_*` index, never the real one |
+| Reindex / retrain with the admin key | `ADMIN_KEY` is set |
+
+The recommender retrain test restores your `model.pkl` afterwards. Service output from the last run is in `backend/tests/.logs/`. Run a single file with `deno task test tests/orders_test.ts`.
+
+## 10. Production notes
 
 - Restrict **CORS** in `backend/shared/cors.ts` (currently permissive for development).
 - Do not commit real **Stripe** or **JWT** secrets.
 - Use HTTPS and a reverse proxy or API gateway in production instead of exposing many ports.
 
-## 10. Repository layout (implementation)
+## 11. Repository layout (implementation)
 
 | Path | Role |
 |------|------|
 | `backend/auth`, `products`, `orders`, `users`, `search` | Hono microservices |
 | `backend/shared` | DB pool, JWT, CORS, middleware |
+| `backend/tests` | Integration tests (`deno task test`) |
 | `database/migrations` | PostgreSQL schema and seed |
 | `ml/recommender`, `ml/forecasting` | FastAPI + models |
 | `frontend/app` | Next.js App Router pages |

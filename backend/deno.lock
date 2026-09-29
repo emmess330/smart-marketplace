@@ -1,5 +1,20 @@
 {
   "version": "5",
+  "specifiers": {
+    "jsr:@std/assert@1": "1.0.19",
+    "jsr:@std/internal@^1.0.12": "1.0.12"
+  },
+  "jsr": {
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/internal@1.0.12": {
+      "integrity": "972a634fd5bc34b242024402972cd5143eac68d8dffaca5eaa4dba30ce17b027"
+    }
+  },
   "redirects": {
     "https://esm.sh/async-function@^1.0.0?target=denonext": "https://esm.sh/async-function@1.0.0?target=denonext",
     "https://esm.sh/async-generator-function@^1.0.0?target=denonext": "https://esm.sh/async-generator-function@1.0.0?target=denonext",
@@ -325,5 +340,10 @@
     "https://esm.sh/side-channel@1.1.0?target=denonext": "af0b34fab98933edb9b50119e3383d0f2df5451b179ded5e92007d6f773d12e2",
     "https://esm.sh/stripe@14.21.0": "f6487cd8974b4c445fe2ed8188d0a680f425bedf793abdead16796e719749d30",
     "https://esm.sh/stripe@14.21.0/denonext/stripe.mjs": "675855e4b1ab9af008b097a62e56ba6861b270f5261f23b326aad227cab1e2ce"
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@std/assert@1"
+    ]
   }
 }
