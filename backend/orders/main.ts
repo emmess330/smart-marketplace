@@ -774,11 +774,11 @@ app.get("/seller/analytics", authMiddleware, async (c) => {
     const topProductsResult = await query(
       `SELECT 
         p.id, p.name, p.price, p.stock_quantity,
-        COALESCE(SUM(oi.quantity), 0) as units_sold,
-        COALESCE(SUM(oi.quantity * oi.price_at_purchase), 0) as revenue
+        COALESCE(SUM(oi.quantity) FILTER (WHERE o.status = 'confirmed'), 0) as units_sold,
+        COALESCE(SUM(oi.quantity * oi.price_at_purchase) FILTER (WHERE o.status = 'confirmed'), 0) as revenue
        FROM products p
        LEFT JOIN order_items oi ON p.id = oi.product_id
-       LEFT JOIN orders o ON oi.order_id = o.id AND o.status = 'confirmed'
+       LEFT JOIN orders o ON oi.order_id = o.id
        WHERE p.seller_id = $1 AND p.is_active = true
        GROUP BY p.id, p.name, p.price, p.stock_quantity
        ORDER BY revenue DESC
