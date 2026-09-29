@@ -45,4 +45,9 @@ export function isUniqueViolation(err: unknown, constraint?: string) {
     (!constraint || err.fields.constraint === constraint);
 }
 
+// True for a FOREIGN KEY violation (a referenced row doesn't exist).
+export function isForeignKeyViolation(err: unknown) {
+  return err instanceof PostgresError && err.fields.code === "23503";
+}
+
 export default pool;

@@ -54,6 +54,12 @@ export default function SearchContent() {
       if (res.data.aggregations?.categories) {
         setCategories(res.data.aggregations.categories);
       }
+    } catch {
+      // e.g. a min price above the max price (400): show no results rather
+      // than leaving the previous search's results on screen.
+      setProducts([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
     }

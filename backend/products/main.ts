@@ -1,6 +1,7 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
-import { query } from "../shared/db.ts";
+import { isForeignKeyViolation, query } from "../shared/db.ts";
+import { optionalUuid, paginationSchema, parseJsonBody, uuidParams } from "../shared/validation.ts";
 import { authMiddleware, type AuthVariables } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
@@ -9,6 +10,11 @@ app.use("*", corsConfig);
 
 const ES_URL = Deno.env.get("ES_HOST") || "http://localhost:9200";
 const SEARCH_INDEX = Deno.env.get("ES_INDEX") ?? "products";
+
+const listQuerySchema = paginationSchema(20).extend({
+  category: z.string().optional(),
+  seller_id: optionalUuid,
+});
 
 const productSchema = z.object({
   name: z.string().min(2),
@@ -93,10 +99,11 @@ async function syncProductToSearch(productId: string) {
 // GET /products — public, paginated list (with optional seller filter)
 app.get("/products", async (c) => {
   try {
-    const page = Number(c.req.query("page") || 1);
-    const limit = Number(c.req.query("limit") || 20);
-    const category = c.req.query("category");
-    const sellerId = c.req.query("seller_id"); // new parameter
+    const parsed = listQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "Invalid query", details: parsed.error.errors }, 400);
+    }
+    const { page, limit, category, seller_id: sellerId } = parsed.data;
     const offset = (page - 1) * limit;
 
     let sql = `
@@ -155,7 +162,7 @@ app.get("/products", async (c) => {
 });
 
 // GET /products/:id — public, single product
-app.get("/products/:id", async (c) => {
+app.get("/products/:id", uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
 
@@ -200,8 +207,7 @@ app.post("/products", authMiddleware, async (c) => {
     }
 
     const seller = sellerResult.rows[0] as Record<string, unknown>;
-    const body = await c.req.json();
-    const data = productSchema.parse(body);
+    const data = await parseJsonBody(c, productSchema);
 
     const result = await query(
       `INSERT INTO products (seller_id, category_id, name, description, price, stock_quantity, images, tags)
@@ -227,13 +233,16 @@ app.post("/products", authMiddleware, async (c) => {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
     }
+    if (isForeignKeyViolation(err)) {
+      return c.json({ error: "Unknown category_id" }, 400);
+    }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
 // PUT /products/:id — protected, seller who owns it only
-app.put("/products/:id", authMiddleware, async (c) => {
+app.put("/products/:id", authMiddleware, uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
     const userId = c.get("userId");
@@ -258,8 +267,7 @@ app.put("/products/:id", authMiddleware, async (c) => {
       return c.json({ error: "Product not found or not yours" }, 404);
     }
 
-    const body = await c.req.json();
-    const data = productSchema.partial().parse(body);
+    const data = await parseJsonBody(c, productSchema.partial());
 
     const fields: string[] = [];
     const params: unknown[] = [];
@@ -312,13 +320,16 @@ app.put("/products/:id", authMiddleware, async (c) => {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
     }
+    if (isForeignKeyViolation(err)) {
+      return c.json({ error: "Unknown category_id" }, 400);
+    }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
 // DELETE /products/:id — protected, seller who owns it only
-app.delete("/products/:id", authMiddleware, async (c) => {
+app.delete("/products/:id", authMiddleware, uuidParams("id"), async (c) => {
   try {
     const { id } = c.req.param();
     const userId = c.get("userId");

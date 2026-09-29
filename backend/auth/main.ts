@@ -5,6 +5,7 @@ import { isUniqueViolation, query, withTransaction } from "../shared/db.ts";
 import { verifyToken } from "../shared/jwt.ts";
 import { createSession } from "../shared/session.ts";
 import { createSellerProfile, StoreNameTakenError } from "../shared/sellers.ts";
+import { parseJsonBody } from "../shared/validation.ts";
 import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
@@ -30,8 +31,7 @@ const loginSchema = z.object({
 
 app.post("/auth/register", async (c) => {
   try {
-    const body = await c.req.json();
-    const data = registerSchema.parse(body);
+    const data = await parseJsonBody(c, registerSchema);
 
     const existing = await query(
       "SELECT id FROM users WHERE email = $1",
@@ -99,8 +99,7 @@ app.post("/auth/register", async (c) => {
 
 app.post("/auth/login", async (c) => {
   try {
-    const body = await c.req.json();
-    const data = loginSchema.parse(body);
+    const data = await parseJsonBody(c, loginSchema);
 
     const result = await query(
       "SELECT id, email, full_name, role, password_hash FROM users WHERE email = $1 AND is_active = true",
@@ -140,9 +139,11 @@ app.post("/auth/login", async (c) => {
 
 app.post("/auth/logout", async (c) => {
   try {
-    const body = await c.req.json();
-    const { refreshToken } = body;
-    if (refreshToken) {
+    // Logging out is best-effort: a missing or unreadable body just means
+    // there is no session to delete.
+    const body = await c.req.json().catch(() => ({}));
+    const { refreshToken } = body as { refreshToken?: unknown };
+    if (typeof refreshToken === "string" && refreshToken) {
       await query("DELETE FROM sessions WHERE refresh_token = $1", [refreshToken]);
     }
     return c.json({ message: "Logged out successfully" });
@@ -156,7 +157,7 @@ app.post("/auth/logout", async (c) => {
 // The new access token carries the user's current role from the database.
 app.post("/auth/refresh", async (c) => {
   try {
-    const { refreshToken } = refreshSchema.parse(await c.req.json());
+    const { refreshToken } = await parseJsonBody(c, refreshSchema);
     try {
       await verifyToken(refreshToken, "refresh");
     } catch {
