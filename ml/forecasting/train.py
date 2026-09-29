@@ -5,10 +5,17 @@ import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
 import pickle
-import os
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from db_config import get_db_url
+
+FORECAST_DIR = Path(__file__).resolve().parent
+MIN_DAYS_FOR_REAL_FORECAST = 7
+
+def forecast_path(seller_id=None):
+    """Where a forecast is pickled — next to this file, whatever the working directory."""
+    name = f"forecast_{seller_id}.pkl" if seller_id else "forecast_global.pkl"
+    return FORECAST_DIR / name
 
 def get_engine():
     return create_engine(get_db_url())
@@ -67,12 +74,20 @@ def generate_synthetic_data():
 
 def train_forecast(seller_id=None):
     print("Fetching sales data...")
-    df = fetch_sales_data(seller_id)
-    
-    if len(df) < 7:
-        print(f"Only {len(df)} days of data — using synthetic data for demonstration")
+    real_df = fetch_sales_data(seller_id)
+    real_df["ds"] = pd.to_datetime(real_df["ds"])
+    real_df["y"] = real_df["y"].astype(float)
+
+    # With too little history, fit on synthetic data so the chart has
+    # something to show — but flag it, so callers never present it as a
+    # prediction of real sales.
+    synthetic = len(real_df) < MIN_DAYS_FOR_REAL_FORECAST
+    if synthetic:
+        print(f"Only {len(real_df)} days of data — using synthetic data for demonstration")
         df = generate_synthetic_data()
-    
+    else:
+        df = real_df.copy()
+
     df["ds"] = pd.to_datetime(df["ds"])
     df["y"] = df["y"].astype(float)
     
@@ -95,8 +110,10 @@ def train_forecast(seller_id=None):
         result = {
             "model": model,
             "forecast": forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(30),
-            "historical": df,
-            "method": "prophet"
+            "historical": real_df,
+            "method": "prophet",
+            "synthetic": synthetic,
+            "data_days": len(real_df),
         }
         
     except Exception as e:
@@ -123,18 +140,19 @@ def train_forecast(seller_id=None):
         result = {
             "model": None,
             "forecast": forecast,
-            "historical": df,
-            "method": "linear_trend"
+            "historical": real_df,
+            "method": "linear_trend",
+            "synthetic": synthetic,
+            "data_days": len(real_df),
         }
     
-    os.makedirs(".", exist_ok=True)
-    filename = f"forecast_{seller_id}.pkl" if seller_id else "forecast_global.pkl"
-    
+    filename = forecast_path(seller_id)
+
     with open(filename, "wb") as f:
         pickle.dump(result, f)
     
     print(f"Forecast saved to {filename}")
-    print(f"Method used: {result['method']}")
+    print(f"Method used: {result['method']}" + (" (on synthetic data)" if synthetic else ""))
     print(f"Next 7 days forecast:")
     print(result["forecast"][["ds", "yhat"]].head(7).to_string(index=False))
     
