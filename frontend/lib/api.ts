@@ -129,14 +129,11 @@ export const searchApi = {
 
   suggest: (q: string) =>
     axios.get(`${SEARCH_URL}/search/suggest`, { params: { q } }),
-
-  index: () =>
-    axios.post(`${SEARCH_URL}/search/index`),
 };
 
 export const recommendApi = {
   forUser: (userId: string) =>
-    axios.get(`${RECOMMEND_URL}/recommend/user/${userId}`),
+    axios.get(`${RECOMMEND_URL}/recommend/user/${userId}`, { headers: authHeaders() }),
 
   similar: (productId: string) =>
     axios.get(`${RECOMMEND_URL}/recommend/similar/${productId}`),

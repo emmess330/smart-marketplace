@@ -33,7 +33,9 @@ export default function HomePage() {
       try {
         let res;
         if (user) {
-          res = await recommendApi.forUser(user.id);
+          // Personal recs need a valid token; fall back to popular if it has
+          // expired rather than showing an empty homepage.
+          res = await recommendApi.forUser(user.id).catch(() => recommendApi.popular());
           setRecommended(res.data.recommendations);
         } else {
           res = await recommendApi.popular();

@@ -225,7 +225,14 @@ def retrain(payload: TokenPayload = Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/recommend/user/{user_id}")
-def recommend_for_user(user_id: str, n: int = 8):
+def recommend_for_user(
+    user_id: str, n: int = 8, payload: TokenPayload = Depends(require_auth)
+):
+    # Recommendations are derived from purchase history, so they're private.
+    if user_id != payload.sub:
+        raise HTTPException(
+            status_code=403, detail="Cannot view another user's recommendations"
+        )
     if model_data is None:
         return {
             "user_id": user_id,
