@@ -5,11 +5,12 @@ import pickle
 import numpy as np
 import pandas as pd
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from db_config import get_db_url
-from auth import TokenPayload, require_auth
+from auth import TokenPayload, require_admin_key, require_auth
 
 app = FastAPI(title="Recommendation Service")
 
@@ -214,8 +215,13 @@ def health():
         "method": model_data.get("method") if model_data else "popular",
     }
 
-@app.post("/recommend/retrain")
-def retrain(payload: TokenPayload = Depends(require_auth)):
+# One retrain at a time: concurrent runs would race on writing model.pkl.
+_retrain_lock = threading.Lock()
+
+@app.post("/recommend/retrain", dependencies=[Depends(require_admin_key)])
+def retrain():
+    if not _retrain_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Retrain already in progress")
     try:
         from train import train_and_save
         train_and_save()
@@ -223,6 +229,8 @@ def retrain(payload: TokenPayload = Depends(require_auth)):
         return {"message": "Model retrained successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        _retrain_lock.release()
 
 @app.get("/recommend/user/{user_id}")
 def recommend_for_user(

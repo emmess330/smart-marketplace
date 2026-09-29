@@ -67,7 +67,7 @@ async function sha256(value: string) {
 // Compares digests so the check takes the same time however much of the key
 // matches.
 async function isValidAdminKey(provided: string | undefined) {
-  const expected = Deno.env.get("SEARCH_ADMIN_KEY");
+  const expected = Deno.env.get("ADMIN_KEY");
   if (!expected || !provided) return false;
   const [a, b] = await Promise.all([sha256(provided), sha256(expected)]);
   let mismatch = 0;
@@ -77,10 +77,10 @@ async function isValidAdminKey(provided: string | undefined) {
 
 // POST /search/index — index all products from PostgreSQL into ES.
 // Operator-only: it drops and rebuilds the index, so it requires the
-// X-Admin-Key header to match SEARCH_ADMIN_KEY in backend/.env.
+// X-Admin-Key header to match ADMIN_KEY in backend/.env.
 app.post("/search/index", async (c) => {
-  if (!Deno.env.get("SEARCH_ADMIN_KEY")) {
-    return c.json({ error: "Reindexing disabled: set SEARCH_ADMIN_KEY in backend/.env" }, 503);
+  if (!Deno.env.get("ADMIN_KEY")) {
+    return c.json({ error: "Reindexing disabled: set ADMIN_KEY in backend/.env" }, 503);
   }
   if (!(await isValidAdminKey(c.req.header("X-Admin-Key")))) {
     return c.json({ error: "Unauthorized" }, 401);

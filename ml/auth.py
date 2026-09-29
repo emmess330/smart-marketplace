@@ -1,6 +1,9 @@
 """JWT auth dependency for the FastAPI ML services, matching backend/shared/jwt.ts (HS256)."""
 from __future__ import annotations
 
+import hmac
+import os
+
 import jwt
 from fastapi import Header, HTTPException
 
@@ -32,3 +35,14 @@ def require_auth(authorization: str = Header(default="")) -> TokenPayload:
 def require_seller(payload: TokenPayload) -> None:
     if payload.role != "seller":
         raise HTTPException(status_code=403, detail="Sellers only")
+
+
+def require_admin_key(x_admin_key: str = Header(default="")) -> None:
+    """Operator-only endpoints: X-Admin-Key must match ADMIN_KEY in backend/.env."""
+    expected = (os.getenv("ADMIN_KEY") or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503, detail="Disabled: set ADMIN_KEY in backend/.env"
+        )
+    if not hmac.compare_digest(x_admin_key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Unauthorized")
