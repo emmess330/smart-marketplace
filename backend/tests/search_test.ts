@@ -50,6 +50,13 @@ Deno.test({ name: "search service", ...suiteOptions }, async (t) => {
       assertEquals(await search(keyword), [productId]);
     });
 
+    await esStep("a misspelled query falls back to typo-tolerant matching", async () => {
+      const typo = keyword.slice(0, 3) + keyword.slice(4); // drop one letter
+      assertEquals(await search(typo), [productId]);
+      const suggest = await api("GET", `${SEARCH}/search/suggest?q=${typo}`);
+      assert(suggest.body.suggestions.some((s: { id: string }) => s.id === productId));
+    });
+
     await esStep("suggest returns matching names", async () => {
       const res = await api("GET", `${SEARCH}/search/suggest?q=${keyword}`);
       assertEquals(res.status, 200);
