@@ -213,7 +213,12 @@ If `permission denied`, run: `chmod +x backend/start-all.sh`
 
 ## 5. Python ML services
 
-`ml/requirements.txt` lists **only what the recommender and forecasting APIs need** (FastAPI, uvicorn, SQLAlchemy, pandas, scikit-learn, Prophet, etc.). It does **not** include Jupyter/notebook stacks. An older full `pip freeze` pulled in **`pywinpty`** (Windows-only); on **macOS with Python 3.13** that fails to build. If you still have a broken venv, remove `ml/.venv` and reinstall:
+Two files describe the ML dependencies:
+
+- **`ml/requirements.lock`**: the exact version of every package (direct and indirect). **Install from this**, as CI does, so everyone runs the same versions. It was verified on Python 3.12 (CI) and 3.13 (macOS), and it resolves on Windows.
+- **`ml/requirements.txt`**: only the direct dependencies with minimum versions (FastAPI, uvicorn, SQLAlchemy, pandas, scikit-learn, Prophet, …). Edit this when adding or upgrading a package, then regenerate the lock (instructions at the top of `requirements.lock`) and run the tests.
+
+Pinning matters: with only minimums, a fresh install picks up whatever is newest, and SQLAlchemy 2.1 silently switched the default Postgres driver, breaking every ML database call. Keep platform markers when regenerating: an earlier full `pip freeze` included **`pywinpty`** (Windows-only) and failed to build on macOS; the lock marks `uvloop` as non-Windows for the same reason.
 
 ```bash
 cd ml
@@ -221,7 +226,7 @@ rm -rf .venv
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install -r requirements.txt
+pip install -r requirements.lock
 ```
 
 Train models if required (see `ml/recommender/train.py`, `ml/forecasting/train.py`), then:
