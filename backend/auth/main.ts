@@ -6,6 +6,7 @@ import { verifyToken } from "../shared/jwt.ts";
 import { createSession } from "../shared/session.ts";
 import { createSellerProfile, StoreNameTakenError } from "../shared/sellers.ts";
 import { parseJsonBody } from "../shared/validation.ts";
+import { clientIp, limitFromEnv, RateLimiter, tooManyRequests } from "../shared/rateLimit.ts";
 import { corsConfig } from "../shared/cors.ts";
 
 const app = new Hono();
@@ -29,7 +30,23 @@ const loginSchema = z.object({
   password: z.string(),
 });
 
+const MINUTE = 60_000;
+
+// Failed logins per email + IP: the main brute-force guard. Keying on the IP
+// too means someone elsewhere can't lock a user out of their own account.
+const loginFailures = new RateLimiter(limitFromEnv("RATE_LIMIT_LOGIN_FAILURES", 5), 15 * MINUTE);
+// Per-IP ceilings. Generous, because many users can share one address (NAT,
+// a campus network).
+const loginAttemptsPerIp = new RateLimiter(limitFromEnv("RATE_LIMIT_LOGIN_PER_IP", 100), 15 * MINUTE);
+const registrationsPerIp = new RateLimiter(limitFromEnv("RATE_LIMIT_REGISTER_PER_IP", 20), 60 * MINUTE);
+const refreshesPerIp = new RateLimiter(limitFromEnv("RATE_LIMIT_REFRESH_PER_IP", 60), MINUTE);
+
 app.post("/auth/register", async (c) => {
+  const ip = clientIp(c);
+  const wait = registrationsPerIp.retryAfter(ip);
+  if (wait) return tooManyRequests(c, wait);
+  registrationsPerIp.hit(ip);
+
   try {
     const data = await parseJsonBody(c, registerSchema);
 
@@ -98,15 +115,26 @@ app.post("/auth/register", async (c) => {
 });
 
 app.post("/auth/login", async (c) => {
+  const ip = clientIp(c);
+  const ipWait = loginAttemptsPerIp.retryAfter(ip);
+  if (ipWait) return tooManyRequests(c, ipWait);
+  loginAttemptsPerIp.hit(ip);
+
   try {
     const data = await parseJsonBody(c, loginSchema);
+    const failureKey = `${data.email.toLowerCase()}|${ip}`;
+    const wait = loginFailures.retryAfter(failureKey);
+    if (wait) return tooManyRequests(c, wait);
 
     const result = await query(
       "SELECT id, email, full_name, role, password_hash FROM users WHERE email = $1 AND is_active = true",
       [data.email]
     );
 
+    // Unknown emails count as failures too, so the limiter doesn't reveal
+    // which emails have accounts.
     if (result.rows.length === 0) {
+      loginFailures.hit(failureKey);
       return c.json({ error: "Invalid credentials" }, 401);
     }
 
@@ -114,8 +142,10 @@ app.post("/auth/login", async (c) => {
     const validPassword = await compare(data.password, user.password_hash as string);
 
     if (!validPassword) {
+      loginFailures.hit(failureKey);
       return c.json({ error: "Invalid credentials" }, 401);
     }
+    loginFailures.reset(failureKey);
 
     const { accessToken, refreshToken } = await createSession(
       user.id as string,
@@ -156,6 +186,11 @@ app.post("/auth/logout", async (c) => {
 // Rotation: the old refresh token is consumed, so each one works once.
 // The new access token carries the user's current role from the database.
 app.post("/auth/refresh", async (c) => {
+  const ip = clientIp(c);
+  const wait = refreshesPerIp.retryAfter(ip);
+  if (wait) return tooManyRequests(c, wait);
+  refreshesPerIp.hit(ip);
+
   try {
     const { refreshToken } = await parseJsonBody(c, refreshSchema);
     try {

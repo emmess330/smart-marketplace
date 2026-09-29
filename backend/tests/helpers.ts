@@ -78,13 +78,28 @@ export async function deleteTestIndex() {
 
 type Running = { name: ServiceName; child: Deno.ChildProcess; logs: Promise<unknown> };
 
-function spawn(name: ServiceName, esEnabled: boolean): Running {
+// Rate limits high enough that ordinary tests never trip them;
+// rate_limit_test.ts overrides these with tight ones.
+const RELAXED_RATE_LIMITS = {
+  RATE_LIMIT_LOGIN_FAILURES: "10000",
+  RATE_LIMIT_LOGIN_PER_IP: "10000",
+  RATE_LIMIT_REGISTER_PER_IP: "10000",
+  RATE_LIMIT_REFRESH_PER_IP: "10000",
+};
+
+function spawn(
+  name: ServiceName,
+  esEnabled: boolean,
+  extraEnv: Record<string, string>,
+): Running {
   const env: Record<string, string> = {
+    ...RELAXED_RATE_LIMITS,
     SERVICE_PORT: String(PORTS[name]),
     ES_INDEX: TEST_ES_INDEX,
     // Unless a test opts in, point services at a closed port so nothing is
     // ever written to a real Elasticsearch index.
     ES_HOST: esEnabled ? ES_URL : "http://127.0.0.1:1",
+    ...extraEnv,
   };
   const command = name === "recommender" || name === "forecasting"
     ? new Deno.Command(ML_PYTHON, {
@@ -136,7 +151,7 @@ async function waitForPort(svc: Running, timeoutMs: number) {
 
 export async function startServices(
   names: ServiceName[],
-  { elasticsearch = false } = {},
+  { elasticsearch = false, env = {} as Record<string, string> } = {},
 ) {
   for (const name of names) {
     try {
@@ -148,7 +163,7 @@ export async function startServices(
     }
   }
 
-  const running = names.map((name) => spawn(name, elasticsearch));
+  const running = names.map((name) => spawn(name, elasticsearch, env));
   const stop = async () => {
     for (const svc of running) {
       try {
