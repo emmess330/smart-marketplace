@@ -18,4 +18,25 @@ export async function query(sql: string, params?: unknown[]) {
   }
 }
 
+export type TxQuery = (sql: string, params?: unknown[]) => ReturnType<typeof query>;
+
+// Runs `fn` on a single pooled connection inside BEGIN/COMMIT, rolling back
+// if it throws. Use for multi-statement writes that must succeed or fail as one.
+export async function withTransaction<T>(fn: (tx: TxQuery) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.queryObject("BEGIN");
+    try {
+      const result = await fn((sql, params) => client.queryObject(sql, params));
+      await client.queryObject("COMMIT");
+      return result;
+    } catch (err) {
+      await client.queryObject("ROLLBACK");
+      throw err;
+    }
+  } finally {
+    client.release();
+  }
+}
+
 export default pool;

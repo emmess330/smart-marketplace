@@ -1,6 +1,6 @@
 import { Hono } from "hono/mod.ts";
 import { z } from "zod";
-import { query } from "../shared/db.ts";
+import { query, type TxQuery, withTransaction } from "../shared/db.ts";
 import { authMiddleware } from "../shared/middleware.ts";
 import { corsConfig } from "../shared/cors.ts";
 
@@ -194,16 +194,31 @@ const checkoutSchema = z.object({
 
 type CartCheckoutItem = Record<string, unknown>;
 
-async function getCheckoutCartItems(userId: string) {
-  const cartResult = await query(
+// With `lockProducts`, the product rows are locked (FOR UPDATE) until the
+// surrounding transaction ends, so concurrent checkouts can't both pass the
+// stock check. Ordering by product id keeps lock acquisition deadlock-free.
+async function getCheckoutCartItems(
+  userId: string,
+  run: TxQuery = query,
+  lockProducts = false,
+) {
+  const cartResult = await run(
     `SELECT ci.quantity, p.id as product_id, p.price, p.stock_quantity, p.name
      FROM cart_items ci
      JOIN products p ON ci.product_id = p.id
-     WHERE ci.user_id = $1 AND p.is_active = true`,
+     WHERE ci.user_id = $1 AND p.is_active = true
+     ORDER BY p.id${lockProducts ? " FOR UPDATE OF p" : ""}`,
     [userId],
   );
 
   return cartResult.rows as CartCheckoutItem[];
+}
+
+// Thrown inside the checkout transaction to roll back and return a 4xx.
+class CheckoutError extends Error {
+  constructor(message: string, readonly status: 400 | 409) {
+    super(message);
+  }
 }
 
 function calculateCartTotal(cartItems: CartCheckoutItem[]) {
@@ -498,22 +513,65 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
 
     const orderStatus = paymentIntentStatusToOrderStatus(paymentIntent.status);
 
-    // Create order
-    let orderResult: Awaited<ReturnType<typeof query>>;
+    // Everything below runs in one transaction: either the order, its items,
+    // the stock decrements and the cart clear all happen, or none do.
+    let result: { order: Record<string, unknown>; items: CartCheckoutItem[] };
     try {
-      orderResult = await query(
-        `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [
-          userId,
-          totalAmount,
-          JSON.stringify(data.shipping_address),
-          data.stripe_payment_id,
-          orderStatus,
-        ],
-      );
+      result = await withTransaction(async (tx) => {
+        // Re-read the cart with product rows locked. The cart or stock may have
+        // changed since the payment was verified above.
+        const lockedItems = await getCheckoutCartItems(userId, tx, true);
+        if (lockedItems.length === 0) {
+          throw new CheckoutError("Cart is empty", 400);
+        }
+        for (const item of lockedItems) {
+          if (Number(item.stock_quantity) < Number(item.quantity)) {
+            throw new CheckoutError(`Insufficient stock for ${item.name}`, 409);
+          }
+        }
+        const lockedTotal = calculateCartTotal(lockedItems);
+        if (Math.round(lockedTotal * 100) !== expectedStripeAmount) {
+          throw new CheckoutError(
+            "Cart changed during checkout and no longer matches the payment",
+            409,
+          );
+        }
+
+        const orderResult = await tx(
+          `INSERT INTO orders (user_id, total_amount, shipping_address, stripe_payment_id, status)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING *`,
+          [
+            userId,
+            lockedTotal,
+            JSON.stringify(data.shipping_address),
+            data.stripe_payment_id,
+            orderStatus,
+          ],
+        );
+        const order = orderResult.rows[0] as Record<string, unknown>;
+
+        for (const item of lockedItems) {
+          await tx(
+            `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
+             VALUES ($1, $2, $3, $4)`,
+            [order.id, item.product_id, item.quantity, item.price],
+          );
+
+          await tx(
+            `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
+            [item.quantity, item.product_id],
+          );
+        }
+
+        await tx("DELETE FROM cart_items WHERE user_id = $1", [userId]);
+
+        return { order, items: lockedItems };
+      });
     } catch (err) {
+      if (err instanceof CheckoutError) {
+        return c.json({ error: err.message }, err.status);
+      }
       // Unique constraint on stripe_payment_id is the authoritative guard
       // against a concurrent request racing the check above.
       if (err instanceof Error && /unique|duplicate/i.test(err.message)) {
@@ -525,26 +583,7 @@ app.post("/orders/checkout", authMiddleware, async (c) => {
       throw err;
     }
 
-    const order = orderResult.rows[0] as Record<string, unknown>;
-
-    // Insert order items and decrement stock
-    for (const item of cartItems) {
-      await query(
-        `INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase)
-         VALUES ($1, $2, $3, $4)`,
-        [order.id, item.product_id, item.quantity, item.price],
-      );
-
-      await query(
-        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`,
-        [item.quantity, item.product_id],
-      );
-    }
-
-    // Clear cart
-    await query("DELETE FROM cart_items WHERE user_id = $1", [userId]);
-
-    return c.json({ order, items: cartItems }, 201);
+    return c.json(result, 201);
   } catch (err) {
     if (err instanceof z.ZodError) {
       return c.json({ error: "Validation failed", details: err.errors }, 400);
