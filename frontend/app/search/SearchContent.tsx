@@ -13,7 +13,8 @@ interface Product {
   category_name: string;
   stock_quantity: number;
   score: number;
-  images?: string[]
+  // Seller-created products store URL strings; Kaggle-imported ones store { url }.
+  images?: (string | { url: string })[];
 }
 
 interface Category {
