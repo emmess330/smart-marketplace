@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 import pickle
@@ -13,6 +13,10 @@ from db_config import get_db_url
 from auth import TokenPayload, require_admin_key, require_auth
 
 app = FastAPI(title="Recommendation Service")
+
+# How many products a caller may ask for (?n=); unbounded values would load
+# arbitrarily large result sets.
+MAX_RESULTS = 50
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +41,11 @@ def load_model():
         print("Model loaded successfully")
     else:
         print("No model found — run train.py first")
+
+def to_records(df):
+    """DataFrame rows as JSON-safe dicts: SQL NULLs that pandas read as NaN
+    become None (NaN isn't valid JSON, so FastAPI would fail with a 500)."""
+    return df.astype(object).where(pd.notna(df), None).to_dict("records")
 
 def get_popular_products(n=8):
     try:
@@ -65,7 +74,7 @@ def get_popular_products(n=8):
         """
         with engine.connect() as conn:
             df = pd.read_sql(text(query), conn, params={"n": n})
-        return df.to_dict("records")
+        return to_records(df)
     except Exception as e:
         print(f"Error fetching popular products: {e}")
         return []
@@ -94,7 +103,7 @@ def get_product_details(product_ids):
         with engine.connect() as conn:
             df = pd.read_sql(text(query), conn, params={"ids": str_ids})
         id_order = {pid: i for i, pid in enumerate(str_ids)}
-        records = df.to_dict("records")
+        records = to_records(df)
         records.sort(key=lambda x: id_order.get(str(x["id"]), 999))
         return records
     except Exception as e:
@@ -234,7 +243,7 @@ def retrain():
 
 @app.get("/recommend/user/{user_id}")
 def recommend_for_user(
-    user_id: str, n: int = 8, payload: TokenPayload = Depends(require_auth)
+    user_id: str, n: int = Query(8, ge=1, le=MAX_RESULTS), payload: TokenPayload = Depends(require_auth)
 ):
     # Recommendations are derived from purchase history, so they're private.
     if user_id != payload.sub:
@@ -274,7 +283,7 @@ def recommend_for_user(
         }
 
 @app.get("/recommend/similar/{product_id}")
-def similar_products(product_id: str, n: int = 6):
+def similar_products(product_id: str, n: int = Query(6, ge=1, le=MAX_RESULTS)):
     if model_data is None:
         return {"product_id": product_id, "similar": [], "method": "no_model"}
 
@@ -296,7 +305,7 @@ def similar_products(product_id: str, n: int = 6):
         return {"product_id": product_id, "similar": [], "method": "error"}
 
 @app.get("/recommend/popular")
-def popular_products(n: int = 8):
+def popular_products(n: int = Query(8, ge=1, le=MAX_RESULTS)):
     return {
         "recommendations": get_popular_products(n),
         "method": "popular"

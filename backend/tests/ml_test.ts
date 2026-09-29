@@ -37,6 +37,14 @@ Deno.test({ name: "ML services", ignore: !hasMl, ...suiteOptions }, async (t) =>
       assertEquals((await api("GET", `${REC}/recommend/similar/${crypto.randomUUID()}`)).status, 200);
     });
 
+    await t.step("recommender: ?n= must be between 1 and 50", async () => {
+      for (const n of ["0", "51", "abc"]) {
+        assertEquals((await api("GET", `${REC}/recommend/popular?n=${n}`)).status, 422, `n=${n}`);
+      }
+      const ok = await api("GET", `${REC}/recommend/popular?n=50`);
+      assertEquals(ok.status, 200);
+    });
+
     await t.step("recommender: personal recommendations are private", async () => {
       const url = `${REC}/recommend/user/${buyer.id}`;
       assertEquals((await api("GET", url)).status, 401);
