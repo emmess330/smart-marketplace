@@ -29,8 +29,16 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
-  useEffect(() => {
+  // Show the skeleton when moving to another page; the effect below then
+  // fetches it. (Setting state synchronously inside the effect would cause
+  // an extra render.)
+  const goToPage = (next: number) => {
+    if (next === page) return;
     setLoading(true);
+    setPage(next);
+  };
+
+  useEffect(() => {
     productsApi.list({ page, limit: 12 })
       .then(res => {
         setProducts(res.data.products);
@@ -99,7 +107,7 @@ export default function ProductsPage() {
       {totalPages > 1 && (
         <div className="flex justify-center gap-2 mt-8">
           <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => goToPage(Math.max(1, page - 1))}
             disabled={page === 1}
             className="px-4 py-2 border rounded-lg text-sm disabled:opacity-40 hover:bg-gray-50"
           >
@@ -109,7 +117,7 @@ export default function ProductsPage() {
             Page {page} of {totalPages}
           </span>
           <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => goToPage(Math.min(totalPages, page + 1))}
             disabled={page === totalPages}
             className="px-4 py-2 border rounded-lg text-sm disabled:opacity-40 hover:bg-gray-50"
           >

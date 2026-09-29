@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+// next-pwa ships no type declarations, so it can't be imported as an ES module here.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const withPWA = require("next-pwa")({
   dest: "public",
   register: true,

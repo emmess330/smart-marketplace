@@ -28,7 +28,7 @@ interface SimilarProduct {
   images?: (string | { url: string })[];
 }
 
-function getImageUrl(images: any[] | undefined, productId: string, size: string = "400/300"): string {
+function getImageUrl(images: Product["images"], productId: string, size: string = "400/300"): string {
   if (images && images.length > 0) {
     const first = images[0];
     if (typeof first === "string") return first;
