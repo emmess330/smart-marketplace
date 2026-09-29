@@ -218,6 +218,6 @@ app.get("/users/sellers/:id", async (c) => {
   }
 });
 
-const port = Number(Deno.env.get("PORT") ?? 8004);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8004);
 console.log(`Users service running on http://localhost:${port}`);
 Deno.serve({ port }, app.fetch);

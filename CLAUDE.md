@@ -59,7 +59,7 @@ deno task dev:users
 ```
 Or all at once: `./backend/start-all.sh` (macOS: opens Terminal windows per service; Linux: backgrounds them, logs to `/tmp`).
 
-Tests: `deno task test` (from `backend/`) runs the integration suite in `backend/tests/`. It spawns the services it needs on test ports 18001–18007 (via the `PORT` env var every service honours) and uses a throwaway Elasticsearch index (`ES_INDEX`), so dev servers can stay up. Fixtures are tagged per run and deleted afterwards — follow the `Fixtures` helper in `tests/helpers.ts` rather than touching existing rows. Stripe/ML/Elasticsearch steps skip when those aren't available. No linter is configured for the backend.
+Tests: `deno task test` (from `backend/`) runs the integration suite in `backend/tests/`. It spawns the services it needs on test ports 18001–18007 (via the `SERVICE_PORT` env var every service honours — not `PORT`, which `.env.example` sets for the legacy entry point) and uses a throwaway Elasticsearch index (`ES_INDEX`), so dev servers can stay up. Fixtures are tagged per run and deleted afterwards — follow the `Fixtures` helper in `tests/helpers.ts` rather than touching existing rows. Stripe/ML/Elasticsearch steps skip when those aren't available. No linter is configured for the backend.
 
 ### Frontend
 Run from `frontend/`:

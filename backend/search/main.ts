@@ -310,6 +310,6 @@ app.get("/search/suggest", async (c) => {
 });
 
 await createIndex();
-const port = Number(Deno.env.get("PORT") ?? 8005);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8005);
 console.log(`Search service running on http://localhost:${port}`);
 Deno.serve({ port }, app.fetch);

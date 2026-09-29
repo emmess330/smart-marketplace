@@ -79,7 +79,7 @@ type Running = { name: ServiceName; child: Deno.ChildProcess; logs: Promise<unkn
 
 function spawn(name: ServiceName, esEnabled: boolean): Running {
   const env: Record<string, string> = {
-    PORT: String(PORTS[name]),
+    SERVICE_PORT: String(PORTS[name]),
     ES_INDEX: TEST_ES_INDEX,
     // Unless a test opts in, point services at a closed port so nothing is
     // ever written to a real Elasticsearch index.

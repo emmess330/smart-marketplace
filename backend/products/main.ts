@@ -396,6 +396,6 @@ app.get("/seller/products", authMiddleware, async (c) => {
   }
 });
 
-const port = Number(Deno.env.get("PORT") ?? 8002);
+const port = Number(Deno.env.get("SERVICE_PORT") ?? 8002);
 console.log(`Products service running on http://localhost:${port}`);
 Deno.serve({ port }, app.fetch);
