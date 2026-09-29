@@ -287,12 +287,12 @@ export class Fixtures {
 
   async product(
     sellerId: string,
-    { name = "Widget", price = 5, stock = 5 } = {},
+    { name = "Widget", price = 5, stock = 5, images = [] as unknown[] } = {},
   ): Promise<string> {
     const result = await query(
-      `INSERT INTO products (seller_id, name, price, stock_quantity)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [sellerId, `Test ${this.tag} ${name}`, price, stock],
+      `INSERT INTO products (seller_id, name, price, stock_quantity, images)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [sellerId, `Test ${this.tag} ${name}`, price, stock, JSON.stringify(images)],
     );
     return (result.rows[0] as { id: string }).id;
   }

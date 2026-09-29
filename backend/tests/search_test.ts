@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
+import { imageUrls } from "../shared/productImages.ts";
 import {
   api,
   deleteTestIndex,
@@ -13,6 +14,14 @@ import {
 const SEARCH = serviceUrl("search");
 const PRODUCTS = serviceUrl("products");
 const ADMIN_KEY = Deno.env.get("ADMIN_KEY") ?? "";
+
+Deno.test("imageUrls handles both stored image shapes", () => {
+  assertEquals(imageUrls(["https://a/1.jpg", { url: "https://b/2.jpg" }]), ["https://a/1.jpg", "https://b/2.jpg"]);
+  assertEquals(imageUrls('[{"url":"https://c/3.jpg"}]'), ["https://c/3.jpg"]);
+  assertEquals(imageUrls([{ nope: 1 }, null, 7]), []);
+  assertEquals(imageUrls("not json"), []);
+  assertEquals(imageUrls(undefined), []);
+});
 
 Deno.test({ name: "search service", ...suiteOptions }, async (t) => {
   const elasticsearch = await esAvailable();
@@ -41,13 +50,33 @@ Deno.test({ name: "search service", ...suiteOptions }, async (t) => {
     const seller = await fx.seller("search");
     // A made-up word so the only match is this fixture.
     const keyword = `zorblax${fx.tag}`;
-    const productId = await fx.product(seller.sellerId, { name: `${keyword} Kettle` });
+    // The two stored image shapes, indexed side by side (a mixed-shape field
+    // would be a mapping conflict in Elasticsearch).
+    const productId = await fx.product(seller.sellerId, {
+      name: `${keyword} Kettle`,
+      images: ["https://img.example/kettle.jpg"],
+    });
+    const importedId = await fx.product(seller.sellerId, {
+      name: `quorvex${fx.tag} Lamp`, // no shared prefix with `keyword`
+      images: [{ url: "https://img.example/lamp.jpg" }],
+    });
+    const imagesFor = async (q: string) => {
+      await refreshTestIndex();
+      const res = await api("GET", `${SEARCH}/search?q=${encodeURIComponent(q)}`);
+      return res.body.products.map((p: { images?: string[] }) => p.images);
+    };
 
     await esStep("reindex with the admin key indexes products", async () => {
       const res = await reindex(ADMIN_KEY);
       assertEquals(res.status, 200, JSON.stringify(res.body));
       assert(!res.body.errors);
       assertEquals(await search(keyword), [productId]);
+    });
+
+    await esStep("results include product image URLs, whichever shape they're stored in", async () => {
+      assertEquals(await imagesFor(keyword), [["https://img.example/kettle.jpg"]]);
+      assertEquals(await imagesFor(`quorvex${fx.tag}`), [["https://img.example/lamp.jpg"]]);
+      assert(importedId);
     });
 
     await esStep("a misspelled query falls back to typo-tolerant matching", async () => {
@@ -66,10 +95,16 @@ Deno.test({ name: "search service", ...suiteOptions }, async (t) => {
     await esStep("product create, update and delete stay in sync with search", async () => {
       const created = await api("POST", `${PRODUCTS}/products`, {
         token: seller.token,
-        body: { name: `${keyword}sync Toaster`, price: 20, stock_quantity: 1 },
+        body: {
+          name: `${keyword}sync Toaster`,
+          price: 20,
+          stock_quantity: 1,
+          images: ["https://img.example/toaster.jpg"],
+        },
       });
       const id = created.body.product.id;
       assertEquals(await search(`${keyword}sync`), [id]);
+      assertEquals(await imagesFor(`${keyword}sync`), [["https://img.example/toaster.jpg"]]);
 
       await api("PUT", `${PRODUCTS}/products/${id}`, {
         token: seller.token,
